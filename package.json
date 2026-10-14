@@ -1,0 +1,33 @@
+{
+  "name": "rutaec",
+  "version": "0.1.0",
+  "description": "RutaEC - Plataforma web para la gestión y venta de pasajes de transporte interprovincial en Ecuador",
+  "main": "server/index.js",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "seed": "node server/seed.js",
+    "db:reset": "node server/seed.js --reset",
+    "test": "node --test",
+    "postinstall": "node scripts/postinstall.js",
+    "docs:api": "node scripts/gen-api-doc.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.21.0",
+    "express-async-errors": "^3.1.1",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "jsqr": "^1.4.0",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.9.15",
+    "pdfkit": "^0.15.0",
+    "qrcode": "^1.5.4"
+  }
+}

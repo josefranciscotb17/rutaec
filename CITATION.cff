@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "Si usas este software en un trabajo académico, cítalo con estos datos."
+title: "RutaEC: plataforma web de venta y control de boletos de transporte interprovincial en Ecuador"
+type: software
+version: 0.1.0
+date-released: 2026-10-13
+license: MIT
+authors:
+  - family-names: "Taipe Bravo"
+    given-names: "José Francisco"
+  - family-names: "Tituaña Calapiña"
+    given-names: "Diana Pamela"
+  - family-names: "Taipe Tixilema"
+    given-names: "Paola Alexandra"
+  - family-names: "Rosillo Córdova"
+    given-names: "Michael Steve"
+  - family-names: "Pico Coello"
+    given-names: "Britthany Korayma"
+repository-code: "https://github.com/josefranciscotb17/rutaec"
+url: "https://github.com/josefranciscotb17/rutaec"
+keywords: [transporte, Ecuador, boletos, QR, buses, Node.js, SQLite, gestión de la configuración]
+abstract: "Sistema web (computador y celular) para cooperativas de transporte interprovincial: venta en línea y en oficina, mapa de asientos por tramo, pago con comprobante, boletos con QR verificable, hojas de ruta con rotación de buses y control de abordaje. Proyecto académico de la Universidad Técnica de Ambato (Manejo y Configuración de Software)."
