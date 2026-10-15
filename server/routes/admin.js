@@ -56,4 +56,19 @@ router.put('/admin/cooperatives/:id', sa, (req, res) => {
   audit(req, 'update', 'cooperatives', c.id, c, req.body); res.json({ ok: true });
 });
 
+/* ---- Geografía: provincias, ciudades, terminales ---- */
+router.get('/admin/geo', both, (req, res) => res.json({
+  provinces: db.prepare('SELECT * FROM provinces ORDER BY name').all(),
+  cities: db.prepare('SELECT c.*, p.name AS province FROM cities c JOIN provinces p ON p.id=c.province_id ORDER BY c.name').all(),
+  terminals: db.prepare('SELECT t.*, c.name AS city FROM terminals t JOIN cities c ON c.id=t.city_id ORDER BY c.name, t.name').all(),
+}));
+const fk = (fn) => (req, res, next) => { try { fn(req, res); } catch (e) { next(String(e.code).startsWith('SQLITE_CONSTRAINT_FOREIGNKEY') ? httpError(409, 'No se puede eliminar: está en uso') : e); } };
+router.post('/admin/cities', sa, (req, res) => { const b = req.body; need(b.name, 'Nombre requerido'); need(b.province_id, 'Provincia requerida'); res.status(201).json({ id: db.prepare('INSERT INTO cities(province_id,name) VALUES(?,?)').run(+b.province_id, b.name.trim()).lastInsertRowid }); });
+router.delete('/admin/cities/:id', sa, fk((req, res) => { db.prepare('DELETE FROM cities WHERE id=?').run(+req.params.id); res.json({ ok: true }); }));
+router.post('/admin/terminals', sa, (req, res) => { const b = req.body; need(b.name, 'Nombre requerido'); need(b.city_id, 'Ciudad requerida'); res.status(201).json({ id: db.prepare('INSERT INTO terminals(city_id,name,address,lat,lng) VALUES(?,?,?,?,?)').run(+b.city_id, b.name.trim(), b.address || null, b.lat ?? null, b.lng ?? null).lastInsertRowid }); });
+router.put('/admin/terminals/:id', sa, (req, res) => { const t = db.prepare('SELECT * FROM terminals WHERE id=?').get(+req.params.id); if (!t) throw httpError(404, 'No encontrada'); const b = { ...t, ...req.body }; db.prepare('UPDATE terminals SET city_id=?,name=?,address=?,lat=?,lng=? WHERE id=?').run(b.city_id, b.name, b.address, b.lat, b.lng, t.id); res.json({ ok: true }); });
+router.delete('/admin/terminals/:id', sa, fk((req, res) => { db.prepare('DELETE FROM terminals WHERE id=?').run(+req.params.id); res.json({ ok: true }); }));
+
+/* ---- Usuarios globales ---- */
+
 module.exports = router;
