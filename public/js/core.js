@@ -103,3 +103,29 @@ document.addEventListener('change', (e) => { const el = e.target.closest('[data-
 document.addEventListener('input', (e) => { const el = e.target.closest('[data-input]'); if (el && App.A[el.dataset.input]) App.A[el.dataset.input](el, e); });
 
 /* ---- Router por hash ---- */
+function route(pattern, handler, roles) { const keys = []; const re = new RegExp('^' + pattern.replace(/:([a-z]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; }) + '$'); App.routes.push({ re, keys, handler, roles }); }
+const go = (p) => { if (location.hash === '#' + p) dispatch(); else location.hash = p; };
+function parseHash() { const h = location.hash.slice(1) || '/'; const [path, qs] = h.split('?'); return { path, q: Object.fromEntries(new URLSearchParams(qs || '')) }; }
+async function dispatch() {
+  clearTimers(); closeModal();
+  const { path, q } = parseHash();
+  for (const r of App.routes) {
+    const m = path.match(r.re); if (!m) continue;
+    const params = {}; r.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); });
+    if (r.roles && !App.user) return go('/login?next=' + encodeURIComponent(location.hash.slice(1)));
+    if (r.roles && !(r.roles.includes(App.user.role) || App.user.role === 'SUPERADMIN')) { renderShell(); paint(view(), html`<div class="card">${empty('No tienes permiso para ver esta página.', '🔒')}</div>`); return; }
+    renderShell(path);
+    paint(view(), loading());
+    try { await r.handler(params, q); } catch (e) { paint(view(), html`<div class="alert err">${e.message}</div>`); if (e.status === 401) logout(true); }
+    window.scrollTo(0, 0); return;
+  }
+  renderShell(path); paint(view(), html`<div class="card">${empty('Página no encontrada', '🧭')}</div>`);
+}
+window.addEventListener('hashchange', dispatch);
+
+/* ---- Sesión ---- */
+function setSession(token, user) { App.token = token; App.user = user; try { localStorage.setItem('rutaec_token', token); } catch (e) { /* */ } }
+function logout(expired) { App.token = null; App.user = null; try { localStorage.removeItem('rutaec_token'); } catch (e) { /* */ } if (expired) toast('Tu sesión expiró. Inicia sesión nuevamente.', 'err'); go('/login'); }
+async function refreshUser() { if (!App.token) return; try { App.user = await api('/auth/me'); } catch (e) { App.token = null; App.user = null; } }
+const HOME = { CLIENT: '/', OFFICE: '/office', DRIVER: '/driver', ASSISTANT: '/driver', COOP_ADMIN: '/coop', AUDITOR: '/coop', SUPERADMIN: '/admin' };
+window.App = App;
