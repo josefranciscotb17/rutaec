@@ -42,3 +42,29 @@ async function loadCoopCtx() {
   if (!cur || !list.find((c) => String(c.id) === cur)) { cur = String(list[0] && list[0].id || ''); try { localStorage.setItem('rutaec_coop', cur); } catch (e) { /* */ } }
   paint($('#coopCtx'), html`${opts(list, cur, (c) => c.id, (c) => c.short_name || c.name)}`);
 }
+App.A.coopCtx = (el) => { try { localStorage.setItem('rutaec_coop', el.value); } catch (e) { /* */ } dispatch(); };
+App.A.menu = () => $('#side').classList.toggle('open');
+App.A.logout = () => { logout(); shellKey = ''; renderShell(); };
+App.A.notifs = async () => {
+  const list = await api('/notifications');
+  modal('Notificaciones', list.length ? html`${list.map((n) => html`<div class="card flat ${n.read ? '' : 'unread'}" style="${n.read ? '' : 'border-left:4px solid var(--accent)'}"><b>${n.title}</b><div class="small">${n.body}</div><div class="small muted">${fdt(n.created_at)} ${n.link ? html`· <a href="${n.link}" data-act="closeModal">abrir</a>` : ''}</div></div>`)}` : empty('Sin notificaciones', '🔔'));
+  if (App.user.unread) { await api('/notifications/read', { method: 'POST' }); App.user.unread = 0; $$('.badge', $('.top')).forEach((b) => b.remove()); }
+};
+
+async function ensureCoopCtx() {
+  if (!App.user || !['SUPERADMIN', 'AUDITOR'].includes(App.user.role)) return;
+  try { const l = await api('/admin/cooperatives'); let cur = ''; try { cur = localStorage.getItem('rutaec_coop') || ''; } catch (e) { /* */ } if (!l.find((c) => String(c.id) === cur)) { try { localStorage.setItem('rutaec_coop', String(l[0] && l[0].id || '')); } catch (e) { /* */ } } } catch (e) { /* */ }
+}
+async function boot() {
+  try { App.cfg = await api('/config'); } catch (e) { App.cfg = { site_name: 'RutaEC' }; }
+  const r = document.documentElement.style;
+  if (App.cfg.primary_color) { r.setProperty('--primary', App.cfg.primary_color); r.setProperty('--secondary', App.cfg.secondary_color); r.setProperty('--accent', App.cfg.accent_color); }
+  document.title = `${App.cfg.site_name} · Pasajes interprovinciales del Ecuador`;
+  await refreshUser();
+  await ensureCoopCtx();
+  if (!location.hash) location.hash = App.user ? HOME[App.user.role] : '/';
+  dispatch();
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  setInterval(async () => { if (App.user && !document.hidden) { try { const u = await api('/auth/me'); if (u.unread !== App.user.unread) { App.user.unread = u.unread; shellKey = ''; renderShell(parseHash().path); } } catch (e) { /* */ } } }, 60000);
+}
+boot();
