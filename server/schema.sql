@@ -54,3 +54,47 @@ CREATE TABLE IF NOT EXISTS season_rules (id INTEGER PRIMARY KEY, coop_id INTEGER
 CREATE TABLE IF NOT EXISTS route_sheets (id INTEGER PRIMARY KEY, coop_id INTEGER NOT NULL REFERENCES cooperatives(id), group_id INTEGER NOT NULL REFERENCES bus_groups(id), start_date TEXT NOT NULL, end_date TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'AUTO', status TEXT NOT NULL DEFAULT 'BORRADOR', created_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')));
 CREATE TABLE IF NOT EXISTS route_sheet_entries (id INTEGER PRIMARY KEY, sheet_id INTEGER NOT NULL REFERENCES route_sheets(id) ON DELETE CASCADE, date TEXT NOT NULL, slot INTEGER NOT NULL, frequency_id INTEGER REFERENCES frequencies(id), bus_id INTEGER NOT NULL REFERENCES buses(id), driver_id INTEGER REFERENCES users(id), assistant_id INTEGER REFERENCES users(id));
 CREATE INDEX IF NOT EXISTS idx_rse_sheet ON route_sheet_entries(sheet_id, date);
+
+CREATE TABLE IF NOT EXISTS trips (
+  id INTEGER PRIMARY KEY, frequency_id INTEGER NOT NULL REFERENCES frequencies(id), bus_id INTEGER NOT NULL REFERENCES buses(id), date TEXT NOT NULL, depart_at TEXT NOT NULL,
+  driver_id INTEGER REFERENCES users(id), assistant_id INTEGER REFERENCES users(id), platform TEXT, status TEXT NOT NULL DEFAULT 'PROGRAMADO' CHECK (status IN ('PROGRAMADO','ABORDANDO','EN_RUTA','FINALIZADO','CANCELADO')),
+  started_at TEXT, finished_at TEXT, cancel_reason TEXT, UNIQUE(frequency_id, date, depart_at)
+);
+CREATE INDEX IF NOT EXISTS idx_trips_date ON trips(date, status);
+
+CREATE TABLE IF NOT EXISTS passengers (id INTEGER PRIMARY KEY, cedula TEXT NOT NULL UNIQUE, nombres TEXT NOT NULL, apellidos TEXT NOT NULL, email TEXT, phone TEXT, category TEXT NOT NULL DEFAULT 'ADULTO');
+CREATE TABLE IF NOT EXISTS orders (
+  id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, buyer_id INTEGER REFERENCES users(id), channel TEXT NOT NULL CHECK (channel IN ('WEB','OFICINA','RUTA')), office_id INTEGER REFERENCES offices(id), seller_id INTEGER REFERENCES users(id),
+  coop_id INTEGER NOT NULL REFERENCES cooperatives(id), trip_id INTEGER NOT NULL REFERENCES trips(id),
+  status TEXT NOT NULL DEFAULT 'RESERVADO' CHECK (status IN ('RESERVADO','EN_REVISION','PAGADO','EXPIRADO','CANCELADO')), method TEXT,
+  subtotal_cents INTEGER NOT NULL DEFAULT 0, discount_cents INTEGER NOT NULL DEFAULT 0, fee_cents INTEGER NOT NULL DEFAULT 0, total_cents INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT, created_at TEXT NOT NULL, paid_at TEXT, cash_session_id INTEGER, note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, expires_at);
+CREATE TABLE IF NOT EXISTS tickets (
+  id INTEGER PRIMARY KEY, public_id TEXT NOT NULL UNIQUE, qr_tag TEXT NOT NULL, short_code TEXT NOT NULL UNIQUE, number TEXT, order_id INTEGER NOT NULL REFERENCES orders(id), trip_id INTEGER NOT NULL REFERENCES trips(id),
+  seat_id INTEGER NOT NULL REFERENCES bus_seats(id), passenger_id INTEGER NOT NULL REFERENCES passengers(id), from_ord INTEGER NOT NULL, to_ord INTEGER NOT NULL, category TEXT NOT NULL DEFAULT 'ADULTO',
+  base_cents INTEGER NOT NULL, discount_cents INTEGER NOT NULL DEFAULT 0, fee_cents INTEGER NOT NULL DEFAULT 0, total_cents INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'RESERVADO' CHECK (status IN ('RESERVADO','VALIDO','ABORDADO','BAJO','ANULADO','EXPIRADO','NO_SHOW')),
+  boarded_at TEXT, boarded_by INTEGER, alighted_at TEXT, void_reason TEXT, voided_by INTEGER, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tickets_trip ON tickets(trip_id, status);
+CREATE INDEX IF NOT EXISTS idx_tickets_order ON tickets(order_id);
+CREATE TABLE IF NOT EXISTS payments (
+  id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), method TEXT NOT NULL CHECK (method IN ('EFECTIVO','TRANSFERENCIA','DEPOSITO','TARJETA')), amount_cents INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDIENTE' CHECK (status IN ('PENDIENTE','EN_REVISION','APROBADO','RECHAZADO')), bank_account_id INTEGER REFERENCES bank_accounts(id), bank TEXT, reference TEXT, paid_date TEXT,
+  proof_file TEXT, proof_hash TEXT, received_cents INTEGER, reviewed_by INTEGER, reviewed_at TEXT, reject_reason TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
+CREATE TABLE IF NOT EXISTS cash_sessions (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), office_id INTEGER REFERENCES offices(id), opened_at TEXT NOT NULL, closed_at TEXT, opening_cents INTEGER NOT NULL DEFAULT 0, expected_cents INTEGER, counted_cents INTEGER, note TEXT);
+CREATE TABLE IF NOT EXISTS scan_events (id INTEGER PRIMARY KEY, ticket_id INTEGER REFERENCES tickets(id), trip_id INTEGER, code TEXT, result TEXT NOT NULL, device TEXT, offline INTEGER NOT NULL DEFAULT 0, user_id INTEGER, scanned_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_scan_trip ON scan_events(trip_id);
+CREATE TABLE IF NOT EXISTS print_jobs (id INTEGER PRIMARY KEY, ticket_id INTEGER, order_id INTEGER, doc_type TEXT NOT NULL, user_id INTEGER, copy_n INTEGER NOT NULL DEFAULT 1, reason TEXT, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), title TEXT NOT NULL, body TEXT, link TEXT, read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, read);
+CREATE TABLE IF NOT EXISTS email_log (id INTEGER PRIMARY KEY, to_addr TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY, user_id INTEGER, user_email TEXT, action TEXT NOT NULL, entity TEXT, entity_id TEXT, before TEXT, after TEXT, ip TEXT, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_audit ON audit_logs(created_at);
+CREATE TABLE IF NOT EXISTS incidents (id INTEGER PRIMARY KEY, trip_id INTEGER NOT NULL REFERENCES trips(id), user_id INTEGER, kind TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ratings (id INTEGER PRIMARY KEY, trip_id INTEGER NOT NULL REFERENCES trips(id), user_id INTEGER NOT NULL REFERENCES users(id), stars INTEGER NOT NULL, comment TEXT, created_at TEXT NOT NULL, UNIQUE(trip_id, user_id));
