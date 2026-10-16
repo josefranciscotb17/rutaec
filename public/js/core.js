@@ -60,3 +60,46 @@ async function openFile(path) { const w = window.open('', '_blank'); try { const
 function openPrint(path, extra = '') { const w = window.open(withToken(path) + extra, '_blank', 'width=480,height=720'); if (!w) toast('Permite las ventanas emergentes para imprimir', 'err'); }
 
 /* ---- UI ---- */
+function toast(msg, kind = '') { const t = document.createElement('div'); t.className = 'toast ' + kind; t.textContent = msg; $('#toasts').appendChild(t); setTimeout(() => t.remove(), kind === 'err' ? 6000 : 3500); }
+function modal(title, body, { wide, onclose } = {}) {
+  closeModal();
+  const ov = document.createElement('div'); ov.className = 'ov'; ov.id = 'modal';
+  ov.innerHTML = `<div class="modal ${wide ? 'wide' : ''}" role="dialog" aria-modal="true"><div class="row spread"><h2>${esc(title)}</h2><button class="iconbtn" style="color:#333" data-act="closeModal" aria-label="Cerrar">✕</button></div><div id="modalBody"></div></div>`;
+  document.body.appendChild(ov); ov._onclose = onclose;
+  ov.addEventListener('mousedown', (e) => { if (e.target === ov) closeModal(); });
+  paint($('#modalBody'), body);
+  return ov;
+}
+function closeModal() { const m = $('#modal'); if (m) { if (m._onclose) m._onclose(); m.remove(); } }
+App.A.closeModal = closeModal;
+const confirmBox = (title, msg, okLabel = 'Confirmar') => new Promise((res) => {
+  modal(title, html`<p>${msg}</p><div class="row mt"><button class="btn err" data-act="cfmYes">${okLabel}</button><button class="btn ghost" data-act="cfmNo">Cancelar</button></div>`, { onclose: () => res(false) });
+  App.A.cfmYes = () => { const m = $('#modal'); m._onclose = null; closeModal(); res(true); }; App.A.cfmNo = () => closeModal();
+});
+const promptBox = (title, label, { value = '', okLabel = 'Aceptar', type = 'text', area } = {}) => new Promise((res) => {
+  modal(title, html`<form data-submit="pmtOk"><div class="field"><label>${label}</label>${area ? html`<textarea name="v" rows="3" required>${value}</textarea>` : html`<input name="v" type="${type}" value="${value}" required autofocus>`}</div><div class="row"><button class="btn">${okLabel}</button><button type="button" class="btn ghost" data-act="closeModal">Cancelar</button></div></form>`, { onclose: () => res(null) });
+  App.A.pmtOk = (f) => { const v = f.v.value; $('#modal')._onclose = null; closeModal(); res(v); };
+});
+function busy(btn, on) { if (!btn) return; btn.disabled = on; if (on) { btn._t = btn.innerHTML; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>'; } else if (btn._t) btn.innerHTML = btn._t; }
+const formObj = (f) => { const o = {}; new FormData(f).forEach((v, k) => { o[k] = typeof v === 'string' ? v.trim() : v; }); $$('input[type=checkbox]', f).forEach((c) => { if (c.name) o[c.name] = c.checked; }); return o; };
+async function guard(btn, fn) { busy(btn, true); try { return await fn(); } catch (e) { toast(e.message, 'err'); } finally { busy(btn, false); } }
+const copy = async (t) => { try { await navigator.clipboard.writeText(t); toast('Copiado', 'ok'); } catch (e) { toast('No se pudo copiar', 'err'); } };
+const debounce = (fn, ms = 300) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+const clearTimers = () => { App.tmr.forEach(clearInterval); App.tmr = []; };
+const every = (fn, ms) => { const i = setInterval(fn, ms); App.tmr.push(i); return i; };
+const loading = () => html`<div class="loading"><span class="spinner"></span></div>`;
+const empty = (m, icon = '🗂️') => html`<div class="empty"><div style="font-size:2rem">${icon}</div>${m}</div>`;
+const tbl = (head, rows, cls = '') => html`<div class="tbl"><table class="${cls}"><thead><tr>${head.map((h) => html`<th>${h}</th>`)}</tr></thead><tbody>${rows}</tbody></table></div>`;
+function bars(rows, key, val, fmt = money) { const max = Math.max(1, ...rows.map((r) => r[val])); return html`<div class="bars">${rows.map((r) => html`<div class="bar-row"><span title="${r[key]}">${String(r[key]).slice(0, 34)}</span><i style="width:${Math.max(2, (r[val] / max) * 100)}%"></i><b class="right">${fmt(r[val])}</b></div>`)}</div>`; }
+
+/* ---- Eventos delegados ---- */
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-act]');
+  if (el && App.A[el.dataset.act]) { if (el.tagName === 'A') e.preventDefault(); App.A[el.dataset.act](el, e); }
+  else if (!e.target.closest('.side') && !e.target.closest('[data-act=menu]')) { const s = $('.side'); if (s) s.classList.remove('open'); }
+});
+document.addEventListener('submit', (e) => { const f = e.target.closest('form[data-submit]'); if (f) { e.preventDefault(); const fn = App.A[f.dataset.submit]; if (fn) fn(f, e); } });
+document.addEventListener('change', (e) => { const el = e.target.closest('[data-change]'); if (el && App.A[el.dataset.change]) App.A[el.dataset.change](el, e); });
+document.addEventListener('input', (e) => { const el = e.target.closest('[data-input]'); if (el && App.A[el.dataset.input]) App.A[el.dataset.input](el, e); });
+
+/* ---- Router por hash ---- */
