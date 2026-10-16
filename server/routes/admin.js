@@ -6,7 +6,7 @@ const S = require('../lib/settings');
 const { requireRole } = require('../lib/auth');
 const { audit } = require('../lib/notify');
 const { imageUpload, saveImage } = require('../lib/upload');
-const { httpError, validEmail, validRuc, validCedula, randCode } = require('../lib/util');
+const { httpError, validEmail, validRuc, validCedula, randCode, today, addDays } = require('../lib/util');
 
 const sa = requireRole(), both = requireRole('AUDITOR'); // requireRole() sin roles = solo SUPERADMIN
 const need = (v, m) => { if (v === undefined || v === null || String(v).trim() === '') throw httpError(400, m); };
@@ -102,5 +102,31 @@ router.post('/admin/users/:id/reset-password', sa, (req, res) => {
 });
 
 /* ---- Temporadas globales ---- */
+router.get('/admin/seasons', both, (req, res) => res.json(db.prepare('SELECT * FROM season_rules WHERE coop_id IS NULL ORDER BY start_date').all()));
+router.post('/admin/seasons', sa, (req, res) => {
+  const b = req.body; need(b.name, 'Nombre requerido');
+  if (!b.start_date || !b.end_date || b.end_date < b.start_date) throw httpError(400, 'Rango inválido');
+  res.status(201).json({ id: db.prepare('INSERT INTO season_rules(coop_id,name,start_date,end_date,pct,active) VALUES(NULL,?,?,?,?,1)').run(b.name, b.start_date, b.end_date, +b.pct || 0).lastInsertRowid });
+});
+router.delete('/admin/seasons/:id', sa, (req, res) => { db.prepare('DELETE FROM season_rules WHERE id=? AND coop_id IS NULL').run(+req.params.id); res.json({ ok: true }); });
 
+/* ---- Auditoría, correos y estadísticas ---- */
+router.get('/admin/audit', both, (req, res) => {
+  const { q, action, user } = req.query, c = [], p = [];
+  if (q) { c.push('(entity LIKE ? OR entity_id LIKE ? OR after LIKE ?)'); p.push(`%${q}%`, `%${q}%`, `%${q}%`); }
+  if (action) { c.push('action=?'); p.push(action); }
+  if (user) { c.push('user_email LIKE ?'); p.push(`%${user}%`); }
+  res.json(db.prepare(`SELECT * FROM audit_logs ${c.length ? 'WHERE ' + c.join(' AND ') : ''} ORDER BY id DESC LIMIT 500`).all(...p));
+});
+router.get('/admin/email-log', both, (req, res) => res.json(db.prepare('SELECT * FROM email_log ORDER BY id DESC LIMIT 200').all()));
+router.get('/admin/stats', both, (req, res) => {
+  const d = today(), g = (sql, ...p) => db.prepare(sql).get(...p);
+  res.json({
+    coops: g('SELECT COUNT(*) c FROM cooperatives WHERE active=1').c, users: g('SELECT COUNT(*) c FROM users').c, clients: g("SELECT COUNT(*) c FROM users WHERE role='CLIENT'").c,
+    buses: g("SELECT COUNT(*) c FROM buses WHERE status='ACTIVO'").c, trips_today: g('SELECT COUNT(*) c FROM trips WHERE date=?', d).c,
+    sales_today: g("SELECT COALESCE(SUM(total_cents),0) s, COUNT(*) n FROM tickets WHERE status IN ('VALIDO','ABORDADO','BAJO') AND substr(created_at,1,10)=?", d),
+    last7: db.prepare("SELECT substr(created_at,1,10) day, COUNT(*) tickets, SUM(total_cents) revenue FROM tickets WHERE status IN ('VALIDO','ABORDADO','BAJO') AND substr(created_at,1,10)>=? GROUP BY 1 ORDER BY 1").all(addDays(d, -6)),
+    by_coop: db.prepare("SELECT c.short_name name, COUNT(t.id) tickets, COALESCE(SUM(t.total_cents),0) revenue FROM cooperatives c LEFT JOIN orders o ON o.coop_id=c.id LEFT JOIN tickets t ON t.order_id=o.id AND t.status IN ('VALIDO','ABORDADO','BAJO') GROUP BY c.id ORDER BY revenue DESC").all(),
+  });
+});
 module.exports = router;
