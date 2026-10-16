@@ -6,7 +6,7 @@ const S = require('../lib/settings');
 const { requireRole } = require('../lib/auth');
 const { audit } = require('../lib/notify');
 const { imageUpload, saveImage } = require('../lib/upload');
-const { httpError, validEmail, validRuc, randCode } = require('../lib/util');
+const { httpError, validEmail, validRuc, validCedula, randCode } = require('../lib/util');
 
 const sa = requireRole(), both = requireRole('AUDITOR'); // requireRole() sin roles = solo SUPERADMIN
 const need = (v, m) => { if (v === undefined || v === null || String(v).trim() === '') throw httpError(400, m); };
@@ -70,5 +70,37 @@ router.put('/admin/terminals/:id', sa, (req, res) => { const t = db.prepare('SEL
 router.delete('/admin/terminals/:id', sa, fk((req, res) => { db.prepare('DELETE FROM terminals WHERE id=?').run(+req.params.id); res.json({ ok: true }); }));
 
 /* ---- Usuarios globales ---- */
+router.get('/admin/users', both, (req, res) => {
+  const { q, role, coop_id } = req.query, c = [], p = [];
+  if (q) { c.push("(u.email LIKE ? OR u.nombres||' '||u.apellidos LIKE ? OR u.cedula LIKE ?)"); p.push(`%${q}%`, `%${q}%`, `%${q}%`); }
+  if (role) { c.push('u.role=?'); p.push(role); }
+  if (coop_id) { c.push('u.coop_id=?'); p.push(+coop_id); }
+  res.json(db.prepare(`SELECT u.id,u.email,u.cedula,u.nombres,u.apellidos,u.role,u.coop_id,u.active,u.last_login,u.locked_until,c.short_name AS coop FROM users u LEFT JOIN cooperatives c ON c.id=u.coop_id ${c.length ? 'WHERE ' + c.join(' AND ') : ''} ORDER BY u.id DESC LIMIT 300`).all(...p));
+});
+router.post('/admin/users', sa, (req, res) => {
+  const b = req.body || {}; need(b.nombres, 'Nombres requeridos'); need(b.apellidos, 'Apellidos requeridos');
+  if (!validEmail(b.email)) throw httpError(400, 'Correo inválido');
+  if (!['SUPERADMIN', 'AUDITOR', 'COOP_ADMIN'].includes(b.role)) throw httpError(400, 'Desde aquí solo se crean SUPERADMIN, AUDITOR o COOP_ADMIN');
+  if (b.role === 'COOP_ADMIN') need(b.coop_id, 'Selecciona la cooperativa');
+  if (b.cedula && !validCedula(b.cedula)) throw httpError(400, 'Cédula inválida');
+  if (db.prepare('SELECT 1 FROM users WHERE email=?').get(b.email)) throw httpError(409, 'Ya existe un usuario con ese correo');
+  const pass = randCode(8);
+  const id = db.prepare('INSERT INTO users(email,cedula,nombres,apellidos,password_hash,role,coop_id,must_change) VALUES(?,?,?,?,?,?,?,1)').run(b.email.toLowerCase(), b.cedula || null, b.nombres, b.apellidos, bcrypt.hashSync(pass, 10), b.role, b.role === 'COOP_ADMIN' ? +b.coop_id : null).lastInsertRowid;
+  audit(req, 'create', 'users', id, null, { email: b.email, role: b.role }); res.status(201).json({ id, temp_password: pass });
+});
+router.put('/admin/users/:id', sa, (req, res) => {
+  const u = db.prepare('SELECT * FROM users WHERE id=?').get(+req.params.id); if (!u) throw httpError(404, 'No encontrado');
+  if (u.id === req.user.id && req.body.active === 0) throw httpError(400, 'No puedes desactivarte');
+  const b = { ...u, ...req.body };
+  db.prepare('UPDATE users SET active=?, failed_attempts=0, locked_until=NULL WHERE id=?').run(b.active ? 1 : 0, u.id);
+  audit(req, 'update', 'users', u.id, { active: u.active }, { active: b.active }); res.json({ ok: true });
+});
+router.post('/admin/users/:id/reset-password', sa, (req, res) => {
+  const u = db.prepare('SELECT * FROM users WHERE id=?').get(+req.params.id); if (!u) throw httpError(404, 'No encontrado');
+  const pass = randCode(8); db.prepare('UPDATE users SET password_hash=?, must_change=1, failed_attempts=0, locked_until=NULL WHERE id=?').run(bcrypt.hashSync(pass, 10), u.id);
+  audit(req, 'reset_password', 'users', u.id); res.json({ temp_password: pass });
+});
+
+/* ---- Temporadas globales ---- */
 
 module.exports = router;
