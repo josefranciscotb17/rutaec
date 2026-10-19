@@ -1,10 +1,11 @@
 /** Gestión de la cooperativa: catálogo operativo, flota, frecuencias, hojas de ruta, viajes y reportes. */
 const router = require('express').Router();
+const bcrypt = require('bcryptjs');
 const { db } = require('../db');
 const { requireRole, coopId } = require('../lib/auth');
 const { audit } = require('../lib/notify');
 const { imageUpload, saveImage } = require('../lib/upload');
-const { httpError, validEmail, validRuc } = require('../lib/util');
+const { today, httpError, validCedula, validEmail, validRuc, randCode } = require('../lib/util');
 
 const read = requireRole('COOP_ADMIN', 'AUDITOR');
 const write = requireRole('COOP_ADMIN');
@@ -63,5 +64,42 @@ crud('/coop/offices', 'offices', ['terminal_id', 'name', 'printer_width', 'auto_
 crud('/coop/seat-types', 'seat_types', ['name', 'factor_pct', 'description'], { order: 'factor_pct', validate: (b) => { need(b.name, 'Indica el nombre'); b.factor_pct = Math.max(10, Math.min(500, +b.factor_pct || 100)); } });
 crud('/coop/bus-groups', 'bus_groups', ['name', 'description'], { order: 'name', validate: (b) => need(b.name, 'Indica el nombre del grupo'), extra: (g) => ({ ...g, buses: db.prepare("SELECT COUNT(*) c FROM buses WHERE group_id=? AND status='ACTIVO'").get(g.id).c }) });
 crud('/coop/seasons', 'season_rules', ['name', 'start_date', 'end_date', 'pct', 'active'], { order: 'start_date', validate: (b) => { need(b.name, 'Indica el nombre'); if (!/^\d{4}-\d{2}-\d{2}$/.test(b.start_date || '') || !/^\d{4}-\d{2}-\d{2}$/.test(b.end_date || '') || b.end_date < b.start_date) throw httpError(400, 'Rango de fechas inválido'); b.pct = Math.max(-50, Math.min(200, +b.pct || 0)); b.active = b.active ?? 1; } });
+
+/* ---------- Personal ---------- */
+const STAFF_ROLES = ['COOP_ADMIN', 'OFFICE', 'DRIVER', 'ASSISTANT'];
+router.get('/coop/users', read, (req, res) => {
+  res.json(db.prepare(`SELECT u.id,u.email,u.cedula,u.nombres,u.apellidos,u.phone,u.role,u.office_id,u.license,u.license_expires,u.active,u.perm_void,u.last_login,o.name AS office FROM users u LEFT JOIN offices o ON o.id=u.office_id WHERE u.coop_id=? AND u.role IN ('COOP_ADMIN','OFFICE','DRIVER','ASSISTANT') ORDER BY u.role,u.apellidos`).all(coopId(req)));
+});
+function checkStaff(b, id) {
+  need(b.nombres, 'Nombres requeridos'); need(b.apellidos, 'Apellidos requeridos');
+  if (!validEmail(b.email)) throw httpError(400, 'Correo inválido');
+  if (!STAFF_ROLES.includes(b.role)) throw httpError(400, 'Rol inválido');
+  if (b.cedula && !validCedula(b.cedula)) throw httpError(400, 'Cédula inválida');
+  if (b.role === 'DRIVER' && b.license_expires && b.license_expires < today()) throw httpError(400, 'La licencia del chofer está vencida');
+  const dup = db.prepare('SELECT id FROM users WHERE email=? AND id<>?').get(b.email, id || 0);
+  if (dup) throw httpError(409, 'Ya existe un usuario con ese correo');
+}
+router.post('/coop/users', write, (req, res) => {
+  const cid = coopId(req), b = req.body || {}; checkStaff(b);
+  const pass = b.password || randCode(8);
+  const id = db.prepare('INSERT INTO users(email,cedula,nombres,apellidos,phone,password_hash,role,coop_id,office_id,license,license_expires,must_change,perm_void) VALUES(?,?,?,?,?,?,?,?,?,?,?,1,?)')
+    .run(b.email.trim().toLowerCase(), b.cedula || null, b.nombres.trim(), b.apellidos.trim(), b.phone || null, bcrypt.hashSync(pass, 10), b.role, cid, b.office_id || null, b.license || null, b.license_expires || null, b.perm_void ? 1 : 0).lastInsertRowid;
+  audit(req, 'create', 'users', id, null, { email: b.email, role: b.role });
+  res.status(201).json({ id, temp_password: pass });
+});
+router.put('/coop/users/:id', write, (req, res) => {
+  const cid = coopId(req), u = own('users', req.params.id, cid), b = { ...u, ...req.body }; checkStaff(b, u.id);
+  if (u.id === req.user.id && (b.active === 0 || b.role !== u.role)) throw httpError(400, 'No puedes desactivarte ni cambiar tu propio rol');
+  db.prepare('UPDATE users SET email=?,cedula=?,nombres=?,apellidos=?,phone=?,role=?,office_id=?,license=?,license_expires=?,active=?,perm_void=? WHERE id=?')
+    .run(b.email.trim().toLowerCase(), b.cedula || null, b.nombres, b.apellidos, b.phone || null, b.role, b.office_id || null, b.license || null, b.license_expires || null, b.active ? 1 : 0, b.perm_void ? 1 : 0, u.id);
+  audit(req, 'update', 'users', u.id, { role: u.role, active: u.active }, { role: b.role, active: b.active });
+  res.json({ ok: true });
+});
+router.post('/coop/users/:id/reset-password', write, (req, res) => {
+  const u = own('users', req.params.id, coopId(req)), pass = randCode(8);
+  db.prepare('UPDATE users SET password_hash=?, must_change=1, failed_attempts=0, locked_until=NULL WHERE id=?').run(bcrypt.hashSync(pass, 10), u.id);
+  audit(req, 'reset_password', 'users', u.id);
+  res.json({ temp_password: pass });
+});
 
 module.exports = router;
