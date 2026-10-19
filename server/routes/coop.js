@@ -5,7 +5,7 @@ const { db, tx } = require('../db');
 const { requireRole, coopId } = require('../lib/auth');
 const { audit } = require('../lib/notify');
 const { imageUpload, saveImage } = require('../lib/upload');
-const { today, httpError, validCedula, validEmail, validRuc, randCode } = require('../lib/util');
+const { today, httpError, validCedula, validEmail, validPlate, validRuc, randCode } = require('../lib/util');
 
 const read = requireRole('COOP_ADMIN', 'AUDITOR');
 const write = requireRole('COOP_ADMIN');
@@ -147,6 +147,52 @@ const syncSeats = tx((bus, layout) => {
   const cap = db.prepare('SELECT COUNT(*) c FROM bus_seats WHERE bus_id=? AND sellable=1').get(bus.id).c;
   const floors = db.prepare('SELECT COALESCE(MAX(floor),1) f FROM bus_seats WHERE bus_id=?').get(bus.id).f;
   db.prepare('UPDATE buses SET capacity=?, floors=? WHERE id=?').run(cap, floors, bus.id);
+});
+
+/* ---------- Buses ---------- */
+const BUS_COLS = ['group_id', 'number', 'plate', 'color', 'year', 'chassis_brand', 'body_brand', 'model', 'amenities', 'status', 'tech_review_expires', 'registration_expires', 'template_id'];
+function busValidate(b, before, cid) {
+  need(b.number, 'Indica el número de unidad');
+  b.plate = String(b.plate || '').toUpperCase().trim();
+  if (!validPlate(b.plate)) throw httpError(400, 'Placa inválida (formato ABC-1234)');
+  if (b.year && (b.year < 1990 || b.year > new Date().getFullYear() + 1)) throw httpError(400, 'Año inválido');
+  b.status = ['ACTIVO', 'MANTENIMIENTO', 'BAJA'].includes(b.status) ? b.status : 'ACTIVO';
+  if (b.group_id) own('bus_groups', b.group_id, cid);
+}
+router.get('/coop/buses', read, (req, res) => {
+  res.json(db.prepare('SELECT b.*, g.name AS group_name FROM buses b LEFT JOIN bus_groups g ON g.id=b.group_id WHERE b.coop_id=? ORDER BY b.number+0, b.number').all(coopId(req)).map(b => ({ ...b, amenities: JSON.parse(b.amenities || '[]') })));
+});
+router.post('/coop/buses', write, fkGuard((req, res) => {
+  const cid = coopId(req), b = req.body || {}; busValidate(b, null, cid);
+  const id = db.prepare(`INSERT INTO buses(coop_id,${BUS_COLS.join(',')}) VALUES(?,${BUS_COLS.map(() => '?').join(',')})`).run(cid, ...BUS_COLS.map(c => c === 'amenities' ? asJson(b[c]) : b[c] ?? null)).lastInsertRowid;
+  if (b.template_id) { const t = own('seat_templates', b.template_id, cid); syncSeats({ id, coop_id: cid }, JSON.parse(t.layout)); }
+  audit(req, 'create', 'buses', id, null, { number: b.number, plate: b.plate });
+  res.status(201).json(db.prepare('SELECT * FROM buses WHERE id=?').get(id));
+}));
+router.put('/coop/buses/:id', write, fkGuard((req, res) => {
+  const cid = coopId(req), before = own('buses', req.params.id, cid), b = { ...before, ...req.body, amenities: req.body.amenities ?? JSON.parse(before.amenities) }; busValidate(b, before, cid);
+  db.prepare(`UPDATE buses SET ${BUS_COLS.map(c => c + '=?').join(',')} WHERE id=?`).run(...BUS_COLS.map(c => c === 'amenities' ? asJson(b[c]) : b[c] ?? null), before.id);
+  if (req.body.template_id && req.body.template_id !== before.template_id) { const t = own('seat_templates', req.body.template_id, cid); syncSeats(before, JSON.parse(t.layout)); }
+  audit(req, 'update', 'buses', before.id, before, req.body);
+  res.json({ ok: true });
+}));
+router.delete('/coop/buses/:id', write, fkGuard((req, res) => {
+  const b = own('buses', req.params.id, coopId(req));
+  if (db.prepare('SELECT 1 FROM trips WHERE bus_id=? LIMIT 1').get(b.id)) { db.prepare("UPDATE buses SET status='BAJA' WHERE id=?").run(b.id); audit(req, 'retire', 'buses', b.id); return res.json({ ok: true, retired: true }); }
+  db.prepare('DELETE FROM buses WHERE id=?').run(b.id); audit(req, 'delete', 'buses', b.id); res.json({ ok: true });
+}));
+router.post('/coop/buses/:id/photo', write, imageUpload, (req, res) => {
+  const b = own('buses', req.params.id, coopId(req)), url = saveImage(req.file); db.prepare('UPDATE buses SET photo=? WHERE id=?').run(url, b.id); res.json({ photo: url });
+});
+router.get('/coop/buses/:id/seats', read, (req, res) => {
+  const b = own('buses', req.params.id, coopId(req));
+  res.json(db.prepare('SELECT s.*, st.name AS type_name FROM bus_seats s JOIN seat_types st ON st.id=s.seat_type_id WHERE s.bus_id=? ORDER BY floor,row,col').all(b.id));
+});
+router.put('/coop/buses/:id/seats', write, (req, res) => {
+  const b = own('buses', req.params.id, coopId(req)), layout = req.body.seats;
+  if (!Array.isArray(layout) || !layout.length) throw httpError(400, 'Envía el listado de asientos');
+  const labels = new Set(); for (const s of layout) { if (labels.has(String(s.label))) throw httpError(400, `Etiqueta repetida: ${s.label}`); labels.add(String(s.label)); }
+  syncSeats(b, layout); audit(req, 'update_seats', 'buses', b.id); res.json({ ok: true });
 });
 
 module.exports = router; module.exports.genLayout = genLayout; module.exports.syncSeats = syncSeats;
