@@ -1,6 +1,6 @@
 const { db } = require('../db');
 const S = require('./settings');
-const { nowLocal, addMinutes } = require('./util');
+const { nowLocal, addMinutes, httpError } = require('./util');
 const { notify } = require('./notify');
 
 const ACTIVE = "('RESERVADO','VALIDO','ABORDADO')";
@@ -44,5 +44,23 @@ function priceTicket({ base, factorPct, seasonPct: sp = 0, category = 'ADULTO', 
 }
 
 /** Estado de cada asiento del bus para el tramo [a,b) */
+function seatMap(tripId, a, b, mineOrderId) {
+  expireOrders();
+  const trip = getTrip(tripId); if (!trip) throw httpError(404, 'Viaje no encontrado');
+  const base = fareFor(trip.frequency_id, a, b);
+  const sp = seasonPct(trip.coop_id, trip.date);
+  const fee = S.get('terminal_fee_cents');
+  const seats = db.prepare(`SELECT s.*, st.name AS type_name, st.factor_pct FROM bus_seats s JOIN seat_types st ON st.id=s.seat_type_id WHERE s.bus_id=? ORDER BY s.floor, s.row, s.col`).all(trip.bus_id);
+  const taken = db.prepare(`SELECT seat_id, status, order_id FROM tickets WHERE trip_id=? AND status IN ${ACTIVE} AND from_ord < ? AND to_ord > ?`).all(tripId, b, a);
+  const tm = new Map(taken.map(t => [t.seat_id, t]));
+  return {
+    trip, seats: seats.map(s => {
+      const t = tm.get(s.id);
+      const status = !s.sellable ? 'bloqueado' : t ? (t.status === 'RESERVADO' ? (mineOrderId && t.order_id === mineOrderId ? 'mio' : 'reservado') : 'ocupado') : 'libre';
+      const price = base == null ? null : priceTicket({ base, factorPct: s.factor_pct, seasonPct: sp }).base + fee;
+      return { id: s.id, label: s.label, floor: s.floor, row: s.row, col: s.col, type: s.type_name, factor_pct: s.factor_pct, status, price_cents: price, sellable: s.sellable };
+    }),
+  };
+}
 
-module.exports = { expireOrders, getTrip, stopAt, departAtStop, fareFor, seasonPct, priceTicket, CATEGORIES, ACTIVE };
+module.exports = { expireOrders, getTrip, stopAt, departAtStop, fareFor, seasonPct, priceTicket, seatMap, CATEGORIES, ACTIVE };
