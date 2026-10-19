@@ -2,9 +2,9 @@ const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const rateLimit = require('express-rate-limit');
 const { db } = require('../db');
-const { sign, publicUser } = require('../lib/auth');
-const { validCedula, validEmail, httpError } = require('../lib/util');
-const { email } = require('../lib/notify');
+const { sign, requireAuth, publicUser } = require('../lib/auth');
+const { validCedula, validEmail, httpError, nowLocal, addMinutes } = require('../lib/util');
+const { email, audit } = require('../lib/notify');
 
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 100, standardHeaders: true, legacyHeaders: false, skip: () => process.env.NODE_ENV === 'test', message: { error: 'Demasiados intentos, espera unos minutos.' } });
 const strongPass = (p) => typeof p === 'string' && p.length >= 8 && /[A-Za-z]/.test(p) && /\d/.test(p);
@@ -21,6 +21,37 @@ router.post('/register', limiter, (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id=?').get(r.lastInsertRowid);
   email(em, 'Bienvenido a RutaEC', `Hola ${nombres}, tu cuenta fue creada. Ya puedes comprar tus pasajes.`);
   res.status(201).json({ token: sign(u), user: publicUser(u) });
+});
+
+router.post('/login', limiter, (req, res) => {
+  const { email: em, password } = req.body || {};
+  const u = db.prepare('SELECT * FROM users WHERE email=? OR cedula=?').get(String(em || '').trim(), String(em || '').trim());
+  if (!u) throw httpError(401, 'Credenciales incorrectas');
+  if (!u.active) throw httpError(403, 'Tu cuenta está suspendida');
+  const now = nowLocal();
+  if (u.locked_until && u.locked_until > now) throw httpError(423, 'Cuenta bloqueada temporalmente por intentos fallidos. Intenta más tarde.');
+  if (!bcrypt.compareSync(String(password || ''), u.password_hash)) {
+    const n = u.failed_attempts + 1;
+    db.prepare('UPDATE users SET failed_attempts=?, locked_until=? WHERE id=?').run(n >= 5 ? 0 : n, n >= 5 ? addMinutes(now, 15) : null, u.id);
+    audit({ user: u, ip: req.ip }, 'LOGIN_FAIL', 'user', u.id);
+    throw httpError(401, 'Credenciales incorrectas');
+  }
+  db.prepare('UPDATE users SET failed_attempts=0, locked_until=NULL, last_login=? WHERE id=?').run(now, u.id);
+  audit({ user: u, ip: req.ip }, 'LOGIN', 'user', u.id);
+  res.json({ token: sign(u), user: publicUser(u) });
+});
+
+router.get('/me', requireAuth, (req, res) => {
+  const u = publicUser(req.user);
+  if (u.coop_id) u.coop = db.prepare('SELECT id,name,short_name,color FROM cooperatives WHERE id=?').get(u.coop_id);
+  if (u.office_id) u.office = db.prepare('SELECT * FROM offices WHERE id=?').get(u.office_id);
+  u.unread = db.prepare('SELECT COUNT(*) c FROM notifications WHERE user_id=? AND read=0').get(u.id).c;
+  res.json(u);
+});
+router.put('/me', requireAuth, (req, res) => {
+  const { nombres, apellidos, phone } = req.body || {};
+  db.prepare('UPDATE users SET nombres=COALESCE(?,nombres), apellidos=COALESCE(?,apellidos), phone=COALESCE(?,phone) WHERE id=?').run(nombres || null, apellidos || null, phone || null, req.user.id);
+  res.json(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id)));
 });
 
 module.exports = router;
