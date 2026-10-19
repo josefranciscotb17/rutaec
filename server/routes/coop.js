@@ -1,7 +1,7 @@
 /** Gestión de la cooperativa: catálogo operativo, flota, frecuencias, hojas de ruta, viajes y reportes. */
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
-const { db } = require('../db');
+const { db, tx } = require('../db');
 const { requireRole, coopId } = require('../lib/auth');
 const { audit } = require('../lib/notify');
 const { imageUpload, saveImage } = require('../lib/upload');
@@ -102,4 +102,51 @@ router.post('/coop/users/:id/reset-password', write, (req, res) => {
   res.json({ temp_password: pass });
 });
 
-module.exports = router;
+/* ---------- Plantillas de asientos ---------- */
+/** Genera un diseño: filas x columnas, pasillo tras 'aisle' columnas, pisos, filas VIP delanteras */
+function genLayout({ floors = 1, rows = 10, cols = 4, aisle = 2, vip_rows = 0, vip_name = 'VIP', normal_name = 'Normal', upper_name = 'Piso superior' }) {
+  const out = []; let n = 1;
+  for (let f = 1; f <= floors; f++) for (let r = 1; r <= rows; r++) for (let c = 1; c <= cols; c++) {
+    const col = c + (c > aisle ? 1 : 0);
+    out.push({ f, r, c: col, label: String(n++), type: f === 1 ? (r <= vip_rows ? vip_name : normal_name) : upper_name });
+  }
+  return out;
+}
+router.post('/coop/seat-templates/generate', write, (req, res) => res.json({ layout: genLayout(req.body || {}) }));
+crud('/coop/seat-templates', 'seat_templates', ['name', 'floors', 'rows', 'cols', 'layout'], {
+  order: 'name',
+  extra: (t) => ({ ...t, layout: JSON.parse(t.layout), seats: JSON.parse(t.layout).length }),
+  validate: (b) => {
+    need(b.name, 'Indica el nombre');
+    const l = typeof b.layout === 'string' ? JSON.parse(b.layout) : b.layout;
+    if (!Array.isArray(l) || !l.length) throw httpError(400, 'El diseño está vacío');
+    const labels = new Set(); for (const s of l) { if (labels.has(s.label)) throw httpError(400, `Etiqueta de asiento repetida: ${s.label}`); labels.add(s.label); }
+    b.layout = JSON.stringify(l); b.floors = Math.max(...l.map(s => s.f)); b.rows = Math.max(...l.map(s => s.r)); b.cols = Math.max(...l.map(s => s.c));
+  },
+});
+function seatTypeId(cid, name) {
+  let r = db.prepare('SELECT id FROM seat_types WHERE coop_id=? AND name=?').get(cid, name || 'Normal');
+  if (!r) r = { id: db.prepare('INSERT INTO seat_types(coop_id,name,factor_pct) VALUES(?,?,100)').run(cid, name || 'Normal').lastInsertRowid };
+  return r.id;
+}
+/** Sincroniza los asientos del bus con un diseño [{f,r,c,label,type|seat_type_id,sellable}] */
+const syncSeats = tx((bus, layout) => {
+  const existing = new Map(db.prepare('SELECT * FROM bus_seats WHERE bus_id=?').all(bus.id).map(s => [s.label, s]));
+  const keep = new Set();
+  for (const s of layout) {
+    const tid = s.seat_type_id || seatTypeId(bus.coop_id, s.type), sell = s.sellable === 0 || s.sellable === false ? 0 : 1;
+    keep.add(String(s.label));
+    const ex = existing.get(String(s.label));
+    if (ex) db.prepare('UPDATE bus_seats SET floor=?,row=?,col=?,seat_type_id=?,sellable=? WHERE id=?').run(s.f || s.floor || 1, s.r || s.row, s.c || s.col, tid, sell, ex.id);
+    else db.prepare('INSERT INTO bus_seats(bus_id,floor,row,col,label,seat_type_id,sellable) VALUES(?,?,?,?,?,?,?)').run(bus.id, s.f || s.floor || 1, s.r || s.row, s.c || s.col, String(s.label), tid, sell);
+  }
+  for (const [label, ex] of existing) if (!keep.has(label)) {
+    const used = db.prepare('SELECT 1 FROM tickets WHERE seat_id=? LIMIT 1').get(ex.id);
+    if (used) db.prepare('UPDATE bus_seats SET sellable=0 WHERE id=?').run(ex.id); else db.prepare('DELETE FROM bus_seats WHERE id=?').run(ex.id);
+  }
+  const cap = db.prepare('SELECT COUNT(*) c FROM bus_seats WHERE bus_id=? AND sellable=1').get(bus.id).c;
+  const floors = db.prepare('SELECT COALESCE(MAX(floor),1) f FROM bus_seats WHERE bus_id=?').get(bus.id).f;
+  db.prepare('UPDATE buses SET capacity=?, floors=? WHERE id=?').run(cap, floors, bus.id);
+});
+
+module.exports = router; module.exports.genLayout = genLayout; module.exports.syncSeats = syncSeats;
