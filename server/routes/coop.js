@@ -57,4 +57,11 @@ router.post('/coop/logo', write, imageUpload, (req, res) => {
   const url = saveImage(req.file); db.prepare('UPDATE cooperatives SET logo=? WHERE id=?').run(url, coopId(req)); res.json({ logo: url });
 });
 
+/* ---------- Cuentas bancarias, oficinas, tipos de asiento, grupos, temporadas ---------- */
+crud('/coop/bank-accounts', 'bank_accounts', ['bank', 'type', 'number', 'holder', 'holder_id', 'active'], { order: 'bank', validate: (b) => { need(b.bank, 'Indica el banco'); need(b.number, 'Indica el número de cuenta'); need(b.holder, 'Indica el titular'); b.active = b.active ?? 1; b.type = b.type || 'Ahorros'; } });
+crud('/coop/offices', 'offices', ['terminal_id', 'name', 'printer_width', 'auto_print'], { order: 'name', validate: (b) => { need(b.name, 'Indica el nombre'); b.printer_width = [58, 80].includes(+b.printer_width) ? +b.printer_width : 80; b.auto_print = b.auto_print ? 1 : 0; } });
+crud('/coop/seat-types', 'seat_types', ['name', 'factor_pct', 'description'], { order: 'factor_pct', validate: (b) => { need(b.name, 'Indica el nombre'); b.factor_pct = Math.max(10, Math.min(500, +b.factor_pct || 100)); } });
+crud('/coop/bus-groups', 'bus_groups', ['name', 'description'], { order: 'name', validate: (b) => need(b.name, 'Indica el nombre del grupo'), extra: (g) => ({ ...g, buses: db.prepare("SELECT COUNT(*) c FROM buses WHERE group_id=? AND status='ACTIVO'").get(g.id).c }) });
+crud('/coop/seasons', 'season_rules', ['name', 'start_date', 'end_date', 'pct', 'active'], { order: 'start_date', validate: (b) => { need(b.name, 'Indica el nombre'); if (!/^\d{4}-\d{2}-\d{2}$/.test(b.start_date || '') || !/^\d{4}-\d{2}-\d{2}$/.test(b.end_date || '') || b.end_date < b.start_date) throw httpError(400, 'Rango de fechas inválido'); b.pct = Math.max(-50, Math.min(200, +b.pct || 0)); b.active = b.active ?? 1; } });
+
 module.exports = router;
