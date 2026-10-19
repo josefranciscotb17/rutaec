@@ -27,5 +27,20 @@ function generateRotation({ buses, frequencies, start, end, drivers = [], assist
   }
   return { entries, warnings, positions: P, parada_count: Math.max(0, N - F) };
 }
-
-module.exports = { generateRotation };
+const toMin = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; };
+/** Detecta solapes de un mismo bus el mismo día. freqInfo: id -> {depart_time, duration_min} */
+function findConflicts(entries, freqInfo, restMin = 60) {
+  const out = [], by = {};
+  for (const e of entries) {
+    if (!e.frequency_id) continue;
+    const f = freqInfo[e.frequency_id]; if (!f) continue;
+    const s = toMin(f.depart_time), en = s + f.duration_min;
+    (by[e.date + '|' + e.bus_id] ||= []).push({ s, en, e });
+  }
+  for (const k of Object.keys(by)) {
+    const arr = by[k].sort((a, b) => a.s - b.s);
+    for (let i = 1; i < arr.length; i++) if (arr[i].s < arr[i - 1].en + restMin) out.push(`Bus ${arr[i].e.bus_id} el ${arr[i].e.date}: dos servicios se solapan o no hay descanso mínimo`);
+  }
+  return out;
+}
+module.exports = { generateRotation, findConflicts, toMin };
