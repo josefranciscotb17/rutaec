@@ -96,5 +96,11 @@ ${auto ? '<script src="/js/autoprint.js"></script>' : ''}</body></html>`;
 }
 
 /** Documento A4 imprimible (manifiesto, cierre de caja, hoja de ruta) */
-
-module.exports = { ticketPdf, thermalHtml, qrPng, qrData, qrUrl, esc, fdate, CAT };
+function a4Page(title, body) {
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+@page{size:A4;margin:14mm}body{font-family:Arial,sans-serif;font-size:12px;color:#111}h1{font-size:18px;margin:0 0 4px}h2{font-size:14px}
+table{border-collapse:collapse;width:100%;margin:8px 0}th,td{border:1px solid #999;padding:4px 6px;text-align:left}th{background:#e9eef5}.m{color:#555}
+.bar{background:#0B2545;color:#fff;padding:8px;text-align:center}.bar button{padding:6px 14px;font-size:14px}.sig{margin-top:50px;display:flex;gap:40px}.sig div{border-top:1px solid #000;width:240px;padding-top:4px}
+@media print{.bar{display:none}}</style></head><body><div class="bar"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>${body}</body></html>`;
+}
+module.exports = { ticketPdf, thermalHtml, a4Page, qrPng, qrData, qrUrl, esc, fdate, CAT };
