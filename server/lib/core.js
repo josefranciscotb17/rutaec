@@ -142,5 +142,23 @@ const createOrder = tx((o) => {
 });
 
 /** Emite los boletos de una orden pagada */
+const issueTickets = tx((orderId, paidBy, method) => {
+  const o = db.prepare('SELECT * FROM orders WHERE id=?').get(orderId);
+  if (!o) throw httpError(404, 'Orden no encontrada');
+  if (o.status === 'PAGADO') return o;
+  if (o.status === 'EXPIRADO' || o.status === 'CANCELADO') throw httpError(409, 'La orden ya no está vigente (expirada o cancelada)');
+  const tickets = db.prepare("SELECT id FROM tickets WHERE order_id=? AND status='RESERVADO'").all(orderId);
+  if (!tickets.length) throw httpError(409, 'La orden no tiene boletos reservados');
+  for (const t of tickets) {
+    db.prepare('UPDATE cooperatives SET ticket_seq = ticket_seq + 1 WHERE id=?').run(o.coop_id);
+    const seq = db.prepare('SELECT ticket_seq s FROM cooperatives WHERE id=?').get(o.coop_id).s;
+    const number = `${String(o.coop_id).padStart(3, '0')}-${String(o.office_id || 1).padStart(3, '0')}-${String(seq).padStart(9, '0')}`;
+    db.prepare("UPDATE tickets SET status='VALIDO', number=? WHERE id=?").run(number, t.id);
+  }
+  db.prepare("UPDATE orders SET status='PAGADO', paid_at=?, expires_at=NULL, method=COALESCE(?,method) WHERE id=?").run(nowLocal(), method || null, orderId);
+  return db.prepare('SELECT * FROM orders WHERE id=?').get(orderId);
+});
 
-module.exports = { expireOrders, getTrip, stopAt, departAtStop, fareFor, seasonPct, priceTicket, seatMap, createOrder, CATEGORIES, ACTIVE, upsertPassenger };
+/** Vista completa de un boleto (PDF, impresión y APIs) */
+
+module.exports = { expireOrders, getTrip, stopAt, departAtStop, fareFor, seasonPct, priceTicket, seatMap, createOrder, issueTickets, CATEGORIES, ACTIVE, upsertPassenger };
