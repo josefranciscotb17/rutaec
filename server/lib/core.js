@@ -63,4 +63,18 @@ function seatMap(tripId, a, b, mineOrderId) {
   };
 }
 
-module.exports = { expireOrders, getTrip, stopAt, departAtStop, fareFor, seasonPct, priceTicket, seatMap, CATEGORIES, ACTIVE };
+function upsertPassenger(p) {
+  const ex = db.prepare('SELECT * FROM passengers WHERE cedula=?').get(p.cedula);
+  if (ex) {
+    db.prepare("UPDATE passengers SET nombres=?, apellidos=?, email=COALESCE(NULLIF(?,''),email), phone=COALESCE(NULLIF(?,''),phone), category=? WHERE id=?").run(p.nombres, p.apellidos, p.email || '', p.phone || '', p.category, ex.id);
+    return ex.id;
+  }
+  return db.prepare('INSERT INTO passengers(cedula,nombres,apellidos,email,phone,category) VALUES(?,?,?,?,?,?)').run(p.cedula, p.nombres, p.apellidos, p.email || null, p.phone || null, p.category).lastInsertRowid;
+}
+
+/**
+ * Crea una orden con sus boletos en estado RESERVADO (bloquea asientos).
+ * o: {tripId, from, to, passengers:[{seatId,cedula,nombres,apellidos,email,phone,category,price_cents?}], buyerId, channel, officeId, sellerId, expiresMinutes, allowStarted}
+ */
+
+module.exports = { expireOrders, getTrip, stopAt, departAtStop, fareFor, seasonPct, priceTicket, seatMap, CATEGORIES, ACTIVE, upsertPassenger };
