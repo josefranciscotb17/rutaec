@@ -177,4 +177,19 @@ function ticketFull(id) {
 }
 const maskCedula = (c) => c ? c.slice(0, 3) + '****' + c.slice(-3) : '';
 
-module.exports = { expireOrders, getTrip, stopAt, departAtStop, fareFor, seasonPct, priceTicket, seatMap, createOrder, issueTickets, ticketFull, maskCedula, CATEGORIES, ACTIVE, upsertPassenger };
+function summarizeTrip(id) {
+  const t = getTrip(id); if (!t) return null;
+  return { id: t.id, date: t.date, depart_at: t.depart_at, status: t.status, coop_name: t.coop_name, bus_number: t.bus_number, plate: t.plate, origin: t.stops[0].city, dest: t.stops[t.stops.length - 1].city, platform: t.platform };
+}
+function ordersWithTickets(where, params) {
+  const orders = db.prepare(`SELECT o.*, c.name AS coop_name FROM orders o JOIN cooperatives c ON c.id=o.coop_id WHERE ${where} ORDER BY o.created_at DESC LIMIT 200`).all(...params);
+  for (const o of orders) {
+    o.trip = summarizeTrip(o.trip_id);
+    o.tickets = db.prepare(`SELECT t.id, t.number, t.status, t.total_cents, t.category, t.from_ord, t.to_ord, s.label AS seat_label, p.nombres, p.apellidos, p.cedula FROM tickets t JOIN bus_seats s ON s.id=t.seat_id JOIN passengers p ON p.id=t.passenger_id WHERE t.order_id=?`).all(o.id);
+    o.payment = db.prepare('SELECT id,method,status,reference,bank,reject_reason,proof_file,amount_cents FROM payments WHERE order_id=? ORDER BY id DESC LIMIT 1').get(o.id) || null;
+    const a = o.tickets[0];
+    if (a && o.trip) { const tr = getTrip(o.trip_id); o.from = stopAt(tr, a.from_ord); o.to = stopAt(tr, a.to_ord); o.depart_at_stop = departAtStop(tr, a.from_ord); }
+  }
+  return orders;
+}
+module.exports = { expireOrders, getTrip, stopAt, departAtStop, fareFor, seasonPct, priceTicket, seatMap, createOrder, issueTickets, ticketFull, maskCedula, ordersWithTickets, summarizeTrip, CATEGORIES, ACTIVE, upsertPassenger };
