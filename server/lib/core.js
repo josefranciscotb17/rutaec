@@ -160,5 +160,21 @@ const issueTickets = tx((orderId, paidBy, method) => {
 });
 
 /** Vista completa de un boleto (PDF, impresión y APIs) */
+function ticketFull(id) {
+  const t = db.prepare(`SELECT t.*, o.code AS order_code, o.channel, o.coop_id, o.buyer_id, o.method, o.office_id, o.seller_id, o.status AS order_status, o.paid_at,
+      p.cedula, p.nombres, p.apellidos, p.email AS pax_email, s.label AS seat_label, st.name AS seat_type
+    FROM tickets t JOIN orders o ON o.id=t.order_id JOIN passengers p ON p.id=t.passenger_id JOIN bus_seats s ON s.id=t.seat_id JOIN seat_types st ON st.id=s.seat_type_id WHERE t.id=?`).get(id);
+  if (!t) return null;
+  const trip = getTrip(t.trip_id);
+  t.trip = trip;
+  t.from = stopAt(trip, t.from_ord); t.to = stopAt(trip, t.to_ord);
+  t.depart_at_stop = departAtStop(trip, t.from_ord);
+  t.arrive_at_stop = addMinutes(trip.depart_at, t.to.minutes);
+  t.code = t.public_id + t.qr_tag;
+  t.seller = t.seller_id ? (db.prepare('SELECT nombres, apellidos FROM users WHERE id=?').get(t.seller_id) || null) : null;
+  t.coop = db.prepare('SELECT name, ruc, color, phone FROM cooperatives WHERE id=?').get(t.coop_id);
+  return t;
+}
+const maskCedula = (c) => c ? c.slice(0, 3) + '****' + c.slice(-3) : '';
 
-module.exports = { expireOrders, getTrip, stopAt, departAtStop, fareFor, seasonPct, priceTicket, seatMap, createOrder, issueTickets, CATEGORIES, ACTIVE, upsertPassenger };
+module.exports = { expireOrders, getTrip, stopAt, departAtStop, fareFor, seasonPct, priceTicket, seatMap, createOrder, issueTickets, ticketFull, maskCedula, CATEGORIES, ACTIVE, upsertPassenger };
