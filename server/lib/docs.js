@@ -1,7 +1,7 @@
 const QRCode = require('qrcode');
 const PDFDocument = require('pdfkit');
 const S = require('./settings');
-const { money, hhmm } = require('./util');
+const { money, hhmm, nowLocal } = require('./util');
 const { maskCedula } = require('./core');
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -51,5 +51,50 @@ async function ticketPdf(tickets, base, res) {
 }
 
 /** HTML imprimible para impresora térmica (58/80 mm) */
+async function thermalHtml(tickets, base, { width = 80, auto = false, copy = 1, reprint = false } = {}) {
+  const cfg = S.all();
+  const mm = width === 58 ? 54 : 76, fs = width === 58 ? 10 : 11;
+  const parts = [];
+  for (const t of tickets) {
+    const img = await qrData(qrUrl(base, t.code), 360);
+    parts.push(`<section class="tk">
+      <div class="c b big">${esc(t.coop.name.toUpperCase())}</div>
+      <div class="c">RUC ${esc(t.coop.ruc || '-')}</div>
+      <div class="c">${esc(t.from.terminal)}</div>
+      <hr><div class="c b">BOLETO N° ${esc(t.number || '-')}</div>${reprint ? '<div class="c b">*** REIMPRESIÓN ***</div>' : ''}<hr>
+      <div class="c b route">${esc(t.from.city.toUpperCase())} &gt;&gt; ${esc(t.to.city.toUpperCase())}</div>
+      <div>FECHA: ${fdate(t.depart_at_stop)} &nbsp; SALIDA: <b>${hhmm(t.depart_at_stop)}</b></div>
+      <div>BUS: ${esc(t.trip.bus_number)} &nbsp; PLACA: ${esc(t.trip.plate)}${t.trip.platform ? ' &nbsp; ANDEN: ' + esc(t.trip.platform) : ''}</div>
+      <div class="b">ASIENTO: ${esc(t.seat_label)} (${esc(t.seat_type)})</div>
+      <div>PASAJERO: ${esc((t.nombres + ' ' + t.apellidos).toUpperCase())}</div>
+      <div>CI: ${esc(maskCedula(t.cedula))} &nbsp; ${esc((CAT[t.category] || '').toUpperCase())}</div><hr>
+      <div class="r"><span>Pasaje</span><span>${(t.base_cents / 100).toFixed(2)}</span></div>
+      ${t.discount_cents ? `<div class="r"><span>Descuento</span><span>-${(t.discount_cents / 100).toFixed(2)}</span></div>` : ''}
+      ${t.fee_cents ? `<div class="r"><span>Tasa terminal</span><span>${(t.fee_cents / 100).toFixed(2)}</span></div>` : ''}
+      <div class="r b"><span>TOTAL USD</span><span>${(t.total_cents / 100).toFixed(2)}</span></div>
+      <div>Pago: ${esc(t.method || '-')} ${t.seller ? ' · Vend: ' + esc(t.seller.nombres.split(' ')[0] + ' ' + t.seller.apellidos.split(' ')[0]) : ''}</div>
+      <div class="c"><img src="${img}" alt="QR"></div>
+      <div class="c b mono">${esc(t.short_code)}</div>
+      <div class="c small">Impreso: ${esc(nowLocal())}${copy > 1 ? ' · copia ' + copy : ''}</div>
+      <div class="c small">${esc(cfg.ticket_footer)}</div>
+    </section>`);
+  }
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Boleto</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+@page { size: ${mm + 4}mm auto; margin: 0 }
+*{box-sizing:border-box} body{margin:0;background:#eee;font-family:'Courier New',monospace;font-size:${fs}px;color:#000}
+.tk{width:${mm}mm;margin:0 auto;background:#fff;padding:2mm 1mm;page-break-after:always;line-height:1.35}
+.c{text-align:center}.b{font-weight:bold}.big{font-size:${fs + 2}px}.route{font-size:${fs + 3}px;margin:2px 0}.small{font-size:${fs - 2}px}.mono{letter-spacing:2px}
+.r{display:flex;justify-content:space-between}hr{border:0;border-top:1px dashed #000;margin:3px 0}
+img{width:${width === 58 ? 36 : 44}mm;height:auto;image-rendering:pixelated}
+.bar{position:sticky;top:0;background:#0B2545;color:#fff;padding:8px;text-align:center;font-family:sans-serif}.bar button{padding:6px 14px;font-size:14px;margin:0 4px;cursor:pointer}
+@media print{body{background:#fff}.bar{display:none}.tk:last-child{page-break-after:auto}}
+</style></head><body>
+<div class="bar">Vista previa ${width} mm · <button onclick="window.print()">Imprimir</button> <button onclick="window.close()">Cerrar</button></div>
+${parts.join('\n')}
+${auto ? '<script src="/js/autoprint.js"></script>' : ''}</body></html>`;
+}
 
-module.exports = { ticketPdf, qrPng, qrData, qrUrl, esc, fdate, CAT };
+/** Documento A4 imprimible (manifiesto, cierre de caja, hoja de ruta) */
+
+module.exports = { ticketPdf, thermalHtml, qrPng, qrData, qrUrl, esc, fdate, CAT };
