@@ -6,7 +6,9 @@ const bcrypt = require('bcryptjs');
 const fs = require('fs'), path = require('path');
 const { db, UPLOADS } = require('./db');
 const S = require('./lib/settings');
-const { today, addDays, makeCedula } = require('./lib/util');
+const { genLayout, syncSeats, autoFares } = require('./routes/coop');
+const { generateRotation } = require('./lib/rotation');
+const { nowLocal, today, addDays, makeCedula } = require('./lib/util');
 
 const PASS = 'Demo1234!';
 let seedN = 20260101;
@@ -72,6 +74,87 @@ async function run({ force = false } = {}) {
     const filler = Array.from({ length: 30 }, (_, i) => user(`viajero${String(i + 1).padStart(2, '0')}@rutaec.test`, pick(NOMBRES), pick(APELLIDOS), 'CLIENT'));
 
     /* ---- Cooperativas ---- */
+    const COOPS = [
+      { key: 'andina', name: 'Cooperativa de Transportes Andina Express', short: 'Andina Express', ruc: '1790012345001', color: '#134074', phone: '02 380 1000', city: 'Quito', office: 'Oficina Terminal Quitumbe', officeT: TQ, office2: 'Oficina Terminal Cuenca', office2T: TC, bank: ['Banco Pichincha', 'Ahorros', '2200123456', 'Cooperativa Andina Express', '1790012345001'], bank2: ['Banco del Pacífico', 'Corriente', '7456123', 'Cooperativa Andina Express', '1790012345001'], nbuses: 7, plates: 'PBA', tpl: 'doble' },
+      { key: 'costaazul', name: 'Compañía de Transportes Costa Azul', short: 'Costa Azul', ruc: '1391234567001', color: '#0A7E8C', phone: '05 262 4000', city: 'Manta', office: 'Oficina Terminal Quitumbe', officeT: TQ, office2: 'Oficina Terminal Manta', office2T: TM, bank: ['Banco Guayaquil', 'Ahorros', '0034567812', 'Costa Azul Transportes S.A.', '1391234567001'], bank2: ['Produbanco', 'Ahorros', '12034567890', 'Costa Azul Transportes S.A.', '1391234567001'], nbuses: 5, plates: 'MBA', tpl: 'simple' },
+      { key: 'sierraverde', name: 'Cooperativa de Transportes Sierra Verde', short: 'Sierra Verde', ruc: '0190456789001', color: '#2E7D32', phone: '07 410 2000', city: 'Cuenca', office: 'Oficina Terminal Guayaquil', officeT: TG, office2: 'Oficina Terminal Cuenca', office2T: TC, bank: ['Banco del Austro', 'Ahorros', '1203456789', 'Cooperativa Sierra Verde', '0190456789001'], bank2: ['Banco Pichincha', 'Corriente', '3100456789', 'Cooperativa Sierra Verde', '0190456789001'], nbuses: 5, plates: 'ABC', tpl: 'simple' },
+    ];
+    const FREQS = {
+      andina: [
+        // [origen, destino, hora, duración, paradas [terminal, min, km], tarifa completa]
+        [TQ, TC, '07:00', 540, [[TQ, 0, 0], [TL, 90, 90], [TA, 150, 135], [TR, 210, 190], [TC, 540, 450]], 1300], [TQ, TC, '13:00', 540, [[TQ, 0, 0], [TL, 90, 90], [TA, 150, 135], [TR, 210, 190], [TC, 540, 450]], 1300], [TQ, TC, '21:00', 540, [[TQ, 0, 0], [TL, 90, 90], [TA, 150, 135], [TR, 210, 190], [TC, 540, 450]], 1400],
+        [TC, TQ, '07:00', 540, [[TC, 0, 0], [TR, 330, 260], [TA, 390, 315], [TL, 450, 360], [TQ, 540, 450]], 1300], [TC, TQ, '13:00', 540, [[TC, 0, 0], [TR, 330, 260], [TA, 390, 315], [TL, 450, 360], [TQ, 540, 450]], 1300], [TC, TQ, '21:00', 540, [[TC, 0, 0], [TR, 330, 260], [TA, 390, 315], [TL, 450, 360], [TQ, 540, 450]], 1400],
+      ],
+      costaazul: [
+        [TQ, TM, '08:00', 480, [[TQ, 0, 0], [TSD, 150, 130], [TP, 400, 340], [TM, 480, 400]], 1100], [TQ, TM, '20:30', 480, [[TQ, 0, 0], [TSD, 150, 130], [TP, 400, 340], [TM, 480, 400]], 1200],
+        [TM, TQ, '08:00', 480, [[TM, 0, 0], [TP, 80, 60], [TSD, 330, 270], [TQ, 480, 400]], 1100], [TM, TQ, '20:30', 480, [[TM, 0, 0], [TP, 80, 60], [TSD, 330, 270], [TQ, 480, 400]], 1200],
+        [TCAR, TIB, '09:30', 150, [[TCAR, 0, 0], [TIB, 150, 115]], 400],
+      ],
+      sierraverde: [
+        [TG, TC, '06:30', 240, [[TG, 0, 0], [TC, 240, 200]], 800], [TG, TC, '14:00', 240, [[TG, 0, 0], [TC, 240, 200]], 800],
+        [TC, TG, '06:30', 240, [[TC, 0, 0], [TG, 240, 200]], 800], [TC, TG, '14:00', 240, [[TC, 0, 0], [TG, 240, 200]], 800],
+        [TG, TMA, '09:00', 180, [[TG, 0, 0], [TMA, 180, 190]], 550],
+      ],
+    };
+    const AMEN = [['Aire acondicionado', 'WiFi', 'Baño', 'Pantallas'], ['Aire acondicionado', 'Baño', 'Cargadores USB'], ['Baño', 'Música', 'Cargadores USB']];
+    const CH = ['Hino', 'Mercedes-Benz', 'Volvo', 'Scania', 'Volkswagen'], BO = ['Busscar', 'Marcopolo', 'Varma', 'Picasso', 'Metrobus'];
+    const ctx = {};
+
+    for (const C of COOPS) {
+      const cid = ins('INSERT INTO cooperatives(ruc,name,short_name,color,phone,email,address) VALUES(?,?,?,?,?,?,?)', C.ruc, C.name, C.short, C.color, C.phone, `info@${C.key}.test`, C.city + ', Ecuador');
+      ins('INSERT INTO bank_accounts(coop_id,bank,type,number,holder,holder_id) VALUES(?,?,?,?,?,?)', cid, ...C.bank);
+      ins('INSERT INTO bank_accounts(coop_id,bank,type,number,holder,holder_id) VALUES(?,?,?,?,?,?)', cid, ...C.bank2);
+      const off1 = ins('INSERT INTO offices(coop_id,terminal_id,name,printer_width,auto_print) VALUES(?,?,?,80,1)', cid, C.officeT, C.office);
+      const off2 = ins('INSERT INTO offices(coop_id,terminal_id,name,printer_width,auto_print) VALUES(?,?,?,58,0)', cid, C.office2T, C.office2);
+      const stN = ins('INSERT INTO seat_types(coop_id,name,factor_pct,description) VALUES(?,?,100,?)', cid, 'Normal', 'Asiento estándar');
+      ins('INSERT INTO seat_types(coop_id,name,factor_pct,description) VALUES(?,?,130,?)', cid, 'VIP', 'Mayor espacio, reclinable completo');
+      ins('INSERT INTO seat_types(coop_id,name,factor_pct,description) VALUES(?,?,110,?)', cid, 'Piso superior', 'Vista panorámica');
+      const gen = C.tpl === 'doble' ? { floors: 2, rows: 7, cols: 4, aisle: 2, vip_rows: 2 } : { floors: 1, rows: 10, cols: 4, aisle: 2, vip_rows: 2 };
+      const layout = genLayout(gen);
+      const tplId = ins('INSERT INTO seat_templates(coop_id,name,floors,rows,cols,layout) VALUES(?,?,?,?,?,?)', cid, C.tpl === 'doble' ? 'Doble piso 56 asientos' : 'Un piso 40 asientos', gen.floors, gen.rows, gen.cols + 1, JSON.stringify(layout));
+      const grp = ins('INSERT INTO bus_groups(coop_id,name,description) VALUES(?,?,?)', cid, 'Flota principal', 'Unidades que rotan en la hoja de ruta');
+      const buses = [];
+      for (let i = 1; i <= C.nbuses; i++) {
+        const bid = ins('INSERT INTO buses(coop_id,group_id,number,plate,color,year,chassis_brand,body_brand,model,floors,amenities,status,tech_review_expires,registration_expires,template_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+          cid, grp, String(i), `${C.plates}-${String(1000 + i * 37 + cid * 100).slice(-4)}`, pick(['Blanco', 'Azul', 'Verde', 'Plateado']), 2016 + (i % 8), pick(CH), pick(BO), 'Interprovincial ' + (2016 + (i % 8)), gen.floors, JSON.stringify(AMEN[i % 3]), 'ACTIVO', addDays(T, i === 3 ? 15 : 200 + i * 10), addDays(T, 300), tplId);
+        syncSeats({ id: bid, coop_id: cid }, layout);
+        buses.push({ id: bid, number: String(i) });
+      }
+      // Personal
+      const staff = { drivers: [], assistants: [] };
+      const mk = (email, nom, ape, role, extra) => user(email, nom, ape, role, { coop: cid, ...extra });
+      mk(`gerente.${C.key}@rutaec.test`, 'Gerente', C.short, 'COOP_ADMIN');
+      mk(`oficina.${C.key}@rutaec.test`, pick(NOMBRES), pick(APELLIDOS), 'OFFICE', { office: off1, void: true });
+      mk(`oficina2.${C.key}@rutaec.test`, pick(NOMBRES), pick(APELLIDOS), 'OFFICE', { office: off2 });
+      for (let i = 1; i <= C.nbuses; i++) {
+        staff.drivers.push({ id: mk(`chofer${i}.${C.key}@rutaec.test`, pick(NOMBRES), pick(APELLIDOS), 'DRIVER', { license: 'E' + (1000000 + i * 1111 + cid), licExp: addDays(T, i === 2 ? 20 : 400) }) });
+        staff.assistants.push({ id: mk(`ayudante${i}.${C.key}@rutaec.test`, pick(NOMBRES), pick(APELLIDOS), 'ASSISTANT') });
+      }
+      // Frecuencias + tarifas
+      const fids = [];
+      for (const [o, d, hh, dur, stops, full] of FREQS[C.key]) {
+        const kind = stops.length > 2 ? 'CON_PARADAS' : 'DIRECTA';
+        const fid = ins('INSERT INTO frequencies(coop_id,origin_terminal_id,dest_terminal_id,depart_time,duration_min,kind,resolution_number,resolution_date,days,active) VALUES(?,?,?,?,?,?,?,?,?,1)', cid, o, d, hh, dur, kind, 'ANT-' + (2020 + fids.length) + '-' + (100 + fids.length), '2023-03-15', '1111111');
+        const st = stops.map((s, i) => ({ ord: i, terminal_id: s[0], minutes: s[1], km: s[2] }));
+        st.forEach(s => ins('INSERT INTO frequency_stops(frequency_id,ord,terminal_id,minutes,km) VALUES(?,?,?,?,?)', fid, s.ord, s.terminal_id, s.minutes, s.km));
+        autoFares(st, full).forEach(f => ins('INSERT INTO fares(frequency_id,from_ord,to_ord,price_cents) VALUES(?,?,?,?)', fid, f.from_ord, f.to_ord, f.price_cents));
+        fids.push({ id: fid, depart_time: hh, days: '1111111', duration_min: dur });
+      }
+      // Hoja de ruta (rotación) de hace 3 días a 14 días y viajes
+      const start = addDays(T, -14), end = addDays(T, 14);
+      const rot = generateRotation({ buses, frequencies: fids, start, end, drivers: staff.drivers, assistants: staff.assistants });
+      const sid = ins("INSERT INTO route_sheets(coop_id,group_id,start_date,end_date,mode,status,created_at) VALUES(?,?,?,?,'AUTO','PUBLICADA',?)", cid, grp, start, end, nowLocal());
+      for (const e of rot.entries) {
+        ins('INSERT INTO route_sheet_entries(sheet_id,date,slot,frequency_id,bus_id,driver_id,assistant_id) VALUES(?,?,?,?,?,?,?)', sid, e.date, e.slot, e.frequency_id, e.bus_id, e.driver_id, e.assistant_id);
+        if (!e.frequency_id) continue;
+        const f = fids.find(x => x.id === e.frequency_id);
+        ins('INSERT INTO trips(frequency_id,bus_id,date,depart_at,driver_id,assistant_id,platform,status,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)', e.frequency_id, e.bus_id, e.date, `${e.date} ${f.depart_time}:00`, e.driver_id, e.assistant_id, String(1 + (e.slot % 12)),
+          'PROGRAMADO', null, null);
+      }
+      ctx[C.key] = { cid, off1, off2, staff };
+    }
+
+    /* ---- Ventas de demostración ---- */
   })();
 
   if (proofJob) fs.writeFileSync(path.join(UPLOADS, 'private', proofJob.pf), await proofPdf(proofJob.ref, proofJob.amount));
