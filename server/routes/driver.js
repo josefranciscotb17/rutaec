@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { db, tx } = require('../db');
 const core = require('../lib/core');
-const { requireAuth, requireRole } = require('../lib/auth');
+const { requireAuth, requireRole, hmac } = require('../lib/auth');
 const { audit } = require('../lib/notify');
 const { nowLocal, addDays, httpError, diffMinutes } = require('../lib/util');
 const { maskCedula } = require('../lib/core');
@@ -63,4 +63,41 @@ router.get('/driver/trips/:id/manifest', ...crew, (req, res) => {
     downloaded_at: nowLocal(), tickets: rows.map(r => ({ id: r.id, code: r.public_id + r.qr_tag, short_code: r.short_code, status: r.status, seat: r.seat, seat_type: r.seat_type, category: r.category, name: `${r.nombres} ${r.apellidos}`, cedula: maskCedula(r.cedula), from: city(r.from_ord), to: city(r.to_ord) })), counts: counts(t.id) });
 });
 
-module.exports = router;
+function parseCode(raw) {
+  let c = String(raw || '').trim(); const i = c.lastIndexOf('/v/'); if (i >= 0) c = c.slice(i + 3);
+  return c.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+}
+/** Procesa un escaneo. El escaneo más antiguo gana (útil para sincronizar offline). */
+function processScan(user, { code, tripId, offline, scannedAt, device }) {
+  const trip = core.getTrip(+tripId);
+  const c = parseCode(code), now = scannedAt || nowLocal();
+  let t = null, bad = false;
+  if (c.length === 34) { const pub = c.slice(0, 26); if (hmac(pub, 8) !== c.slice(26)) bad = true; else t = db.prepare('SELECT * FROM tickets WHERE public_id=?').get(pub); }
+  else if (c.length === 10) t = db.prepare('SELECT * FROM tickets WHERE short_code=?').get(c);
+  else bad = true;
+  const log = (result, tk) => db.prepare('INSERT INTO scan_events(ticket_id,trip_id,code,result,device,offline,user_id,scanned_at) VALUES(?,?,?,?,?,?,?,?)').run(tk ? tk.id : null, trip ? trip.id : null, c.slice(0, 40), result, device || null, offline ? 1 : 0, user.id, now);
+  if (bad || !t) { log('INVALIDO', null); return { result: 'INVALIDO', message: 'Código no reconocido' }; }
+  const f = core.ticketFull(t.id);
+  const info = { name: `${f.nombres} ${f.apellidos}`, seat: f.seat_label, seat_type: f.seat_type, category: f.category, cedula: maskCedula(f.cedula), from: f.from.city, to: f.to.city, number: f.number, date: f.trip.date };
+  if (t.trip_id !== trip.id) { log('OTRO_VIAJE', t); return { result: 'OTRO_VIAJE', message: `Boleto de otro viaje: ${f.from.city} - ${f.to.city} el ${f.depart_at_stop.slice(0, 16)}`, ticket: info }; }
+  if (t.status === 'ANULADO') { log('ANULADO', t); return { result: 'ANULADO', message: 'Boleto anulado', ticket: info }; }
+  if (['RESERVADO', 'EXPIRADO'].includes(t.status)) { log('NO_PAGADO', t); return { result: 'NO_PAGADO', message: 'Boleto sin pago confirmado', ticket: info }; }
+  if (['ABORDADO', 'BAJO'].includes(t.status)) { log('YA_USADO', t); return { result: 'YA_USADO', message: 'Ya fue escaneado a las ' + (t.boarded_at || '').slice(11, 16), boarded_at: t.boarded_at, ticket: info }; }
+  db.prepare("UPDATE tickets SET status='ABORDADO', boarded_at=?, boarded_by=? WHERE id=?").run(now, user.id, t.id);
+  if (trip.status === 'PROGRAMADO') db.prepare("UPDATE trips SET status='ABORDANDO' WHERE id=?").run(trip.id);
+  log('VALIDO', t);
+  return { result: 'VALIDO', message: 'Boleto válido', ticket: info, review_doc: t.category !== 'ADULTO', counts: counts(trip.id) };
+}
+router.post('/driver/scan', ...crew, (req, res) => {
+  const t = myTrip(req, req.body.tripId);
+  if (['CANCELADO', 'FINALIZADO'].includes(t.status)) throw httpError(409, 'El viaje no admite escaneos');
+  res.json(processScan(req.user, req.body));
+});
+router.post('/driver/scans/batch', ...crew, (req, res) => {
+  const scans = (req.body.scans || []).slice().sort((a, b) => String(a.scannedAt).localeCompare(String(b.scannedAt)));
+  const results = [];
+  for (const s of scans) { try { myTrip(req, s.tripId); results.push({ ...processScan(req.user, { ...s, offline: true }), local_id: s.local_id }); } catch (e) { results.push({ result: 'ERROR', message: e.message, local_id: s.local_id }); } }
+  res.json({ results });
+});
+
+module.exports = router; module.exports.processScan = processScan; module.exports.parseCode = parseCode;
