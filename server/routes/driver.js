@@ -4,6 +4,7 @@ const core = require('../lib/core');
 const { requireAuth, requireRole } = require('../lib/auth');
 const { audit } = require('../lib/notify');
 const { nowLocal, addDays, httpError, diffMinutes } = require('../lib/util');
+const { maskCedula } = require('../lib/core');
 
 const crew = [requireAuth, requireRole('DRIVER', 'ASSISTANT')];
 function myTrip(req, id) {
@@ -52,5 +53,14 @@ function summary(t) {
     expected: c.expected, boarded: c.boarded, no_show: c.no_show, route_sales: route, scans, bus_number: t.bus_number, plate: t.plate };
 }
 router.get('/driver/trips/:id/summary', ...crew, (req, res) => res.json(summary(myTrip(req, req.params.id))));
+
+/** Datos del viaje para uso sin conexión */
+router.get('/driver/trips/:id/manifest', ...crew, (req, res) => {
+  const t = myTrip(req, req.params.id);
+  const rows = db.prepare(`SELECT tk.id, tk.public_id, tk.qr_tag, tk.short_code, tk.status, tk.category, tk.from_ord, tk.to_ord, tk.number, s.label seat, st.name seat_type, p.nombres, p.apellidos, p.cedula FROM tickets tk JOIN passengers p ON p.id=tk.passenger_id JOIN bus_seats s ON s.id=tk.seat_id JOIN seat_types st ON st.id=s.seat_type_id WHERE tk.trip_id=? AND tk.status IN ('VALIDO','ABORDADO','BAJO','NO_SHOW','ANULADO')`).all(t.id);
+  const city = (o) => t.stops.find(s => s.ord === o).city;
+  res.json({ trip: { id: t.id, date: t.date, depart_at: t.depart_at, status: t.status, bus_number: t.bus_number, stops: t.stops, origin: t.stops[0].city, dest: t.stops[t.stops.length - 1].city },
+    downloaded_at: nowLocal(), tickets: rows.map(r => ({ id: r.id, code: r.public_id + r.qr_tag, short_code: r.short_code, status: r.status, seat: r.seat, seat_type: r.seat_type, category: r.category, name: `${r.nombres} ${r.apellidos}`, cedula: maskCedula(r.cedula), from: city(r.from_ord), to: city(r.to_ord) })), counts: counts(t.id) });
+});
 
 module.exports = router;
