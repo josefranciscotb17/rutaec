@@ -62,5 +62,17 @@ function card(t, a, b, dep, arr, base, sm, free, types = []) {
     amenities: JSON.parse(t.amenities || '[]'), photo: t.photo, rating: rating && rating.n ? rating : null, platform: t.platform,
   };
 }
+router.get('/trips/:id', (req, res) => {
+  const t = core.getTrip(+req.params.id); if (!t) throw httpError(404, 'Viaje no encontrado');
+  t.amenities = JSON.parse(t.amenities || '[]');
+  const { driver_id, assistant_id, ...pub } = t;
+  res.json(pub);
+});
+router.get('/trips/:id/seats', (req, res) => {
+  const m = core.seatMap(+req.params.id, +req.query.from, +req.query.to, +req.query.order || 0);
+  res.json({ seats: m.seats, floors: m.trip.floors });
+});
+
+/** Verificación pública del QR (lo que abre la cámara de un celular) */
 
 module.exports = router;
