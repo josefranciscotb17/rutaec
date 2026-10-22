@@ -7,6 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const { db, ROOT, UPLOADS } = require('./db');
 const { loadUser } = require('./lib/auth');
+const core = require('./lib/core');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -46,6 +47,8 @@ app.use((err, req, res, next) => {
 
 function start() {
   const port = +(process.env.PORT || 3000);
+    // Libera los asientos de las reservas vencidas cada 30 segundos
+  setInterval(() => { try { core.expireOrders(); } catch (e) { console.error(e); } }, 30000).unref();
   return app.listen(port, () => console.log(`RutaEC lista en http://localhost:${port}`));
 }
 if (require.main === module) start();
