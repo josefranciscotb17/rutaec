@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { db, tx } = require('../db');
 const core = require('../lib/core');
 const { requireAuth, requireRole, hmac } = require('../lib/auth');
-const { audit } = require('../lib/notify');
+const { notifyRole, audit } = require('../lib/notify');
 const { nowLocal, addDays, httpError, diffMinutes } = require('../lib/util');
 const { maskCedula } = require('../lib/core');
 
@@ -99,5 +99,35 @@ router.post('/driver/scans/batch', ...crew, (req, res) => {
   for (const s of scans) { try { myTrip(req, s.tripId); results.push({ ...processScan(req.user, { ...s, offline: true }), local_id: s.local_id }); } catch (e) { results.push({ result: 'ERROR', message: e.message, local_id: s.local_id }); } }
   res.json({ results });
 });
-
-module.exports = router; module.exports.processScan = processScan; module.exports.parseCode = parseCode;
+router.post('/driver/trips/:id/alight', ...crew, (req, res) => {
+  const t = myTrip(req, req.params.id);
+  const r = db.prepare("UPDATE tickets SET status='BAJO', alighted_at=? WHERE id=? AND trip_id=? AND status='ABORDADO'").run(nowLocal(), +req.body.ticketId, t.id);
+  if (!r.changes) throw httpError(409, 'El pasajero no está abordado');
+  res.json({ ok: true });
+});
+router.post('/driver/sale', ...crew, (req, res) => {
+  const b = req.body || {}, t = myTrip(req, b.tripId);
+  const id = tx(() => {
+    const oid = core.createOrder({ tripId: t.id, from: b.from, to: b.to, passengers: b.passengers, channel: 'RUTA', sellerId: req.user.id, expiresMinutes: 5 });
+    const o = db.prepare('SELECT * FROM orders WHERE id=?').get(oid);
+    db.prepare("INSERT INTO payments(order_id,method,amount_cents,status,reviewed_by,reviewed_at,created_at) VALUES(?, 'EFECTIVO', ?, 'APROBADO', ?, ?, ?)").run(oid, o.total_cents, req.user.id, nowLocal(), nowLocal());
+    core.issueTickets(oid, req.user.id, 'EFECTIVO');
+    db.prepare("UPDATE tickets SET status='ABORDADO', boarded_at=?, boarded_by=? WHERE order_id=?").run(nowLocal(), req.user.id, oid);
+    return oid;
+  })();
+  audit(req, 'ROUTE_SALE', 'order', id);
+  res.status(201).json(require('./sales').orderDetail(db.prepare('SELECT * FROM orders WHERE id=?').get(id)));
+});
+router.get('/driver/trips/:id/free-seats', ...crew, (req, res) => {
+  const t = myTrip(req, req.params.id);
+  const m = core.seatMap(t.id, +req.query.from, +req.query.to);
+  res.json({ seats: m.seats, floors: t.floors });
+});
+router.post('/driver/trips/:id/incident', ...crew, (req, res) => {
+  const t = myTrip(req, req.params.id), { kind, detail } = req.body || {};
+  if (!kind) throw httpError(400, 'Indica el tipo de incidencia');
+  db.prepare('INSERT INTO incidents(trip_id,user_id,kind,detail,created_at) VALUES(?,?,?,?,?)').run(t.id, req.user.id, kind, detail || null, nowLocal());
+  notifyRole(t.coop_id, ['COOP_ADMIN'], `Incidencia: ${kind}`, `Bus ${t.bus_number} · ${t.stops[0].city}-${t.stops[t.stops.length - 1].city}. ${detail || ''}`, '#/coop/trips');
+  res.status(201).json({ ok: true });
+});
+module.exports = router; module.exports.processScan = processScan;
