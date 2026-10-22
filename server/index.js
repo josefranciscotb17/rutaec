@@ -47,9 +47,16 @@ app.use((err, req, res, next) => {
 
 function start() {
   const port = +(process.env.PORT || 3000);
-    // Libera los asientos de las reservas vencidas cada 30 segundos
+  // Libera los asientos de las reservas vencidas cada 30 segundos
   setInterval(() => { try { core.expireOrders(); } catch (e) { console.error(e); } }, 30000).unref();
-  return app.listen(port, () => console.log(`RutaEC lista en http://localhost:${port}`));
+  const listen = () => app.listen(port, () => console.log(`RutaEC lista en http://localhost:${port}`));
+  // Si la base está vacía (primer arranque), carga los datos de demostración
+  if (!db.prepare('SELECT COUNT(*) n FROM users').get().n) {
+    console.log('Base de datos vacía: cargando datos de demostración…');
+    Promise.resolve(require('./seed').run()).then(listen);
+    return null;
+  }
+  return listen();
 }
 if (require.main === module) start();
 module.exports = { app, start };
