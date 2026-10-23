@@ -2,13 +2,14 @@
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const { db, tx } = require('../db');
+const S = require('../lib/settings');
 const core = require('../lib/core');
 const docs = require('../lib/docs');
 const { requireRole, coopId } = require('../lib/auth');
 const { notify, audit } = require('../lib/notify');
 const { generateRotation, findConflicts } = require('../lib/rotation');
 const { imageUpload, saveImage } = require('../lib/upload');
-const { nowLocal, today, addDays, httpError, validCedula, validEmail, validPlate, validRuc, randCode } = require('../lib/util');
+const { nowLocal, today, addDays, httpError, validCedula, validEmail, validPlate, validRuc, randCode, money, dow } = require('../lib/util');
 
 const read = requireRole('COOP_ADMIN', 'AUDITOR');
 const write = requireRole('COOP_ADMIN');
@@ -401,5 +402,29 @@ router.get('/coop/dashboard', read, (req, res) => {
     ],
   });
 });
-
+router.get('/coop/reports/sales', read, (req, res) => {
+  const cid = coopId(req), { from, to } = range(req);
+  const base = "FROM tickets t JOIN orders o ON o.id=t.order_id JOIN trips tr ON tr.id=t.trip_id JOIN frequencies f ON f.id=tr.frequency_id WHERE o.coop_id=? AND t.status IN ('VALIDO','ABORDADO','BAJO') AND substr(o.paid_at,1,10) BETWEEN ? AND ?";
+  const out = {
+    from, to,
+    totals: db.prepare(`SELECT COUNT(*) tickets, COALESCE(SUM(t.total_cents),0) revenue, COALESCE(SUM(t.discount_cents),0) discounts, COALESCE(SUM(t.fee_cents),0) fees ${base}`).get(cid, from, to),
+    by_day: db.prepare(`SELECT substr(o.paid_at,1,10) day, COUNT(*) tickets, SUM(t.total_cents) revenue ${base} GROUP BY 1 ORDER BY 1`).all(cid, from, to),
+    by_channel: db.prepare(`SELECT o.channel, COUNT(*) tickets, SUM(t.total_cents) revenue ${base} GROUP BY 1`).all(cid, from, to),
+    by_method: db.prepare(`SELECT COALESCE(o.method,'-') method, COUNT(*) tickets, SUM(t.total_cents) revenue ${base} GROUP BY 1`).all(cid, from, to),
+    by_category: db.prepare(`SELECT t.category, COUNT(*) tickets, SUM(t.total_cents) revenue ${base} GROUP BY 1`).all(cid, from, to),
+    by_route: db.prepare(`SELECT oc.name||' → '||dc.name route, COUNT(*) tickets, SUM(t.total_cents) revenue ${base.replace('WHERE', 'JOIN terminals ot ON ot.id=f.origin_terminal_id JOIN cities oc ON oc.id=ot.city_id JOIN terminals dt ON dt.id=f.dest_terminal_id JOIN cities dc ON dc.id=dt.city_id WHERE')} GROUP BY 1 ORDER BY revenue DESC LIMIT 15`).all(cid, from, to),
+    by_office: db.prepare(`SELECT COALESCE(of.name,'(en línea / ruta)') office, COUNT(*) tickets, SUM(t.total_cents) revenue ${base.replace('WHERE', 'LEFT JOIN offices of ON of.id=o.office_id WHERE')} GROUP BY 1 ORDER BY revenue DESC`).all(cid, from, to),
+    occupancy: db.prepare(`SELECT ROUND(100.0*SUM(sold)/NULLIF(SUM(cap),0),1) pct FROM (SELECT (SELECT COUNT(*) FROM tickets x WHERE x.trip_id=tr.id AND x.status IN ('VALIDO','ABORDADO','BAJO')) sold, b.capacity cap FROM trips tr JOIN frequencies f ON f.id=tr.frequency_id JOIN buses b ON b.id=tr.bus_id WHERE f.coop_id=? AND tr.date BETWEEN ? AND ? AND tr.status<>'CANCELADO')`).get(cid, from, to).pct,
+    no_show: db.prepare("SELECT COUNT(*) c FROM tickets t JOIN trips tr ON tr.id=t.trip_id JOIN frequencies f ON f.id=tr.frequency_id WHERE f.coop_id=? AND tr.date BETWEEN ? AND ? AND tr.status='FINALIZADO' AND t.status='VALIDO'").get(cid, from, to).c,
+  };
+  if (req.query.format === 'csv') {
+    const rows = [['fecha', 'boletos', 'ingresos_usd'], ...out.by_day.map(r => [r.day, r.tickets, (r.revenue / 100).toFixed(2)])];
+    res.type('text/csv').attachment(`ventas_${from}_${to}.csv`).send('﻿' + rows.map(r => r.join(';')).join('\n'));
+  } else res.json(out);
+});
+router.get('/coop/audit', read, (req, res) => {
+  const cid = coopId(req);
+  res.json(db.prepare('SELECT a.* FROM audit_logs a LEFT JOIN users u ON u.id=a.user_id WHERE u.coop_id=? ORDER BY a.id DESC LIMIT 300').all(cid));
+});
+router.get('/coop/incidents', read, (req, res) => res.json(db.prepare(`SELECT i.*, t.date, b.number AS bus_number FROM incidents i JOIN trips t ON t.id=i.trip_id JOIN frequencies f ON f.id=t.frequency_id JOIN buses b ON b.id=t.bus_id WHERE f.coop_id=? ORDER BY i.id DESC LIMIT 200`).all(coopId(req))));
 module.exports = router; module.exports.genLayout = genLayout; module.exports.syncSeats = syncSeats; module.exports.autoFares = autoFares;
