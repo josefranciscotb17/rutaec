@@ -3,6 +3,7 @@ const { db } = require('../db');
 const S = require('../lib/settings');
 const core = require('../lib/core');
 const { nowLocal, diffMinutes, httpError, hhmm } = require('../lib/util');
+const { hmac } = require('../lib/auth');
 
 router.get('/config', (req, res) => res.json({ ...S.publicConfig(), demo: process.env.DEMO_MODE !== 'false' }));
 
@@ -74,5 +75,13 @@ router.get('/trips/:id/seats', (req, res) => {
 });
 
 /** Verificación pública del QR (lo que abre la cámara de un celular) */
-
-module.exports = router;
+function verify(code) {
+  const pub = String(code || '').slice(0, 26), tag = String(code || '').slice(26);
+  const t = db.prepare('SELECT id FROM tickets WHERE public_id=?').get(pub);
+  if (!t || hmac(pub, 8) !== tag) return { valid: false, reason: 'Código no reconocido' };
+  const f = core.ticketFull(t.id);
+  const ok = ['VALIDO', 'ABORDADO'].includes(f.status);
+  return { valid: ok, status: f.status, reason: ok ? null : 'Boleto ' + f.status.toLowerCase(), coop: f.coop.name, route: `${f.from.city} - ${f.to.city}`, depart_at: f.depart_at_stop, seat: f.seat_label, number: f.number };
+}
+router.get('/verify/:code', (req, res) => res.json(verify(req.params.code)));
+module.exports = router; module.exports.verify = verify;

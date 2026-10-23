@@ -7,6 +7,9 @@ const path = require('path');
 const fs = require('fs');
 const { db, ROOT, UPLOADS } = require('./db');
 const { loadUser } = require('./lib/auth');
+const S = require('./lib/settings');
+const docs = require('./lib/docs');
+const { verify } = require('./routes/public');
 const core = require('./lib/core');
 
 const app = express();
@@ -29,6 +32,18 @@ for (const f of fs.readdirSync(path.join(__dirname, 'routes')).sort()) {
 }
 app.get('/api/health', (req, res) => res.json({ ok: true, time: require('./lib/util').nowLocal() }));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
+
+/** Página pública que abre el celular al escanear el QR de un boleto */
+app.get('/v/:code', (req, res) => {
+  const r = verify(req.params.code), cfg = S.all();
+  const color = r.valid ? '#1b7f3b' : '#b3261e';
+  res.type('html').send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verificación de boleto - ${docs.esc(cfg.site_name)}</title>
+<style>body{font-family:system-ui,sans-serif;margin:0;background:#f4f6fa;display:grid;place-items:center;min-height:100vh}.c{background:#fff;border-radius:16px;padding:28px;max-width:380px;width:92%;box-shadow:0 6px 24px #0002;text-align:center}.b{display:inline-block;color:#fff;background:${color};border-radius:99px;padding:6px 18px;font-weight:700}dl{text-align:left;margin:18px 0 0}dt{font-size:12px;color:#667}dd{margin:0 0 8px;font-weight:600}small{color:#889}</style></head><body><div class="c"><h2 style="margin:0 0 12px;color:${cfg.primary_color}">${docs.esc(cfg.site_name)}</h2>
+<span class="b">${r.valid ? 'BOLETO VÁLIDO' : 'NO VÁLIDO'}</span>
+${r.coop ? `<dl><dt>Cooperativa</dt><dd>${docs.esc(r.coop)}</dd><dt>Ruta</dt><dd>${docs.esc(r.route)}</dd><dt>Salida</dt><dd>${docs.esc(r.depart_at)}</dd><dt>Asiento</dt><dd>${docs.esc(r.seat)}</dd><dt>N.º</dt><dd>${docs.esc(r.number || '-')}</dd><dt>Estado</dt><dd>${docs.esc(r.status)}</dd></dl>` : `<p>${docs.esc(r.reason || '')}</p>`}
+<p><small>Solo el personal de la cooperativa puede marcar el abordaje.</small></p></div></body></html>`);
+});
+
 
 app.use('/uploads/public', express.static(path.join(UPLOADS, 'public'), { maxAge: '7d', index: false }));
 app.use(express.static(path.join(ROOT, 'public'), { maxAge: '1h', setHeaders: (res, p) => { if (/sw\.js$|\.html$/.test(p)) res.setHeader('Cache-Control', 'no-cache'); } }));
