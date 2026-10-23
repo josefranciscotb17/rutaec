@@ -2,10 +2,14 @@
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const { db, tx } = require('../db');
+const S = require('../lib/settings');
+const core = require('../lib/core');
+const docs = require('../lib/docs');
 const { requireRole, coopId } = require('../lib/auth');
-const { audit } = require('../lib/notify');
+const { notify, audit } = require('../lib/notify');
+const { generateRotation, findConflicts } = require('../lib/rotation');
 const { imageUpload, saveImage } = require('../lib/upload');
-const { today, httpError, validCedula, validEmail, validPlate, validRuc, randCode } = require('../lib/util');
+const { nowLocal, today, addDays, httpError, validCedula, validEmail, validPlate, validRuc, randCode, money, dow } = require('../lib/util');
 
 const read = requireRole('COOP_ADMIN', 'AUDITOR');
 const write = requireRole('COOP_ADMIN');
@@ -195,4 +199,232 @@ router.put('/coop/buses/:id/seats', write, (req, res) => {
   syncSeats(b, layout); audit(req, 'update_seats', 'buses', b.id); res.json({ ok: true });
 });
 
-module.exports = router; module.exports.genLayout = genLayout; module.exports.syncSeats = syncSeats;
+/* ---------- Frecuencias, paradas y tarifas ---------- */
+function freqFull(f) {
+  f.stops = db.prepare('SELECT s.ord,s.terminal_id,s.minutes,s.km,tm.name AS terminal,ci.name AS city FROM frequency_stops s JOIN terminals tm ON tm.id=s.terminal_id JOIN cities ci ON ci.id=tm.city_id WHERE s.frequency_id=? ORDER BY s.ord').all(f.id);
+  f.fares = db.prepare('SELECT from_ord,to_ord,price_cents FROM fares WHERE frequency_id=? ORDER BY from_ord,to_ord').all(f.id);
+  f.origin = f.stops[0] && f.stops[0].city; f.dest = f.stops.length ? f.stops[f.stops.length - 1].city : null;
+  return f;
+}
+router.get('/coop/frequencies', read, (req, res) => res.json(db.prepare('SELECT * FROM frequencies WHERE coop_id=? ORDER BY depart_time, id').all(coopId(req)).map(freqFull)));
+/** Tarifa completa -> matriz proporcional a los km (redondeo a 5 centavos, mínimo $0.50) */
+function autoFares(stops, fullCents) {
+  const totalKm = stops[stops.length - 1].km || stops.length - 1, out = [];
+  for (let a = 0; a < stops.length; a++) for (let b = a + 1; b < stops.length; b++) {
+    const share = (stops[b].km - stops[a].km) / (totalKm || 1);
+    out.push({ from_ord: a, to_ord: b, price_cents: Math.max(50, Math.round(fullCents * share / 5) * 5) });
+  }
+  return out;
+}
+const saveFreq = tx((cid, id, b) => {
+  const f = [b.origin_terminal_id, b.dest_terminal_id];
+  const stops = (b.stops || []).map((s, i) => ({ terminal_id: +s.terminal_id, minutes: +s.minutes || 0, km: +s.km || 0, ord: i }));
+  if (stops.length < 2) throw httpError(400, 'Define al menos origen y destino');
+  if (new Set(stops.map(s => s.terminal_id)).size !== stops.length) throw httpError(400, 'Una terminal se repite en la ruta');
+  stops[0].minutes = 0; stops[0].km = 0; stops[stops.length - 1].minutes = +b.duration_min;
+  for (let i = 1; i < stops.length; i++) if (stops[i].minutes <= stops[i - 1].minutes || stops[i].km < stops[i - 1].km) throw httpError(400, 'Los minutos y km de las paradas deben ser crecientes');
+  const vals = [stops[0].terminal_id, stops[stops.length - 1].terminal_id, b.depart_time, +b.duration_min, stops.length > 2 ? 'CON_PARADAS' : (b.kind || 'DIRECTA'), b.resolution_number || null, b.resolution_date || null, b.days || '1111111', b.active === 0 || b.active === false ? 0 : 1];
+  if (id) db.prepare('UPDATE frequencies SET origin_terminal_id=?,dest_terminal_id=?,depart_time=?,duration_min=?,kind=?,resolution_number=?,resolution_date=?,days=?,active=? WHERE id=?').run(...vals, id);
+  else id = db.prepare('INSERT INTO frequencies(origin_terminal_id,dest_terminal_id,depart_time,duration_min,kind,resolution_number,resolution_date,days,active,coop_id) VALUES(?,?,?,?,?,?,?,?,?,?)').run(...vals, cid).lastInsertRowid;
+  const hasTickets = db.prepare('SELECT 1 FROM tickets t JOIN trips tr ON tr.id=t.trip_id WHERE tr.frequency_id=? LIMIT 1').get(id);
+  const oldN = db.prepare('SELECT COUNT(*) c FROM frequency_stops WHERE frequency_id=?').get(id).c;
+  if (hasTickets && oldN !== stops.length) throw httpError(409, 'La frecuencia ya tiene boletos: no se puede cambiar el número de paradas');
+  db.prepare('DELETE FROM frequency_stops WHERE frequency_id=?').run(id);
+  for (const s of stops) db.prepare('INSERT INTO frequency_stops(frequency_id,ord,terminal_id,minutes,km) VALUES(?,?,?,?,?)').run(id, s.ord, s.terminal_id, s.minutes, s.km);
+  let fares = b.fares;
+  if (!fares && b.auto_fare_cents) fares = autoFares(stops, +b.auto_fare_cents);
+  if (fares) {
+    db.prepare('DELETE FROM fares WHERE frequency_id=?').run(id);
+    for (const r of fares) { if (!(r.price_cents > 0)) throw httpError(400, 'Toda tarifa debe ser mayor a 0'); db.prepare('INSERT INTO fares(frequency_id,from_ord,to_ord,price_cents) VALUES(?,?,?,?)').run(id, r.from_ord, r.to_ord, Math.round(r.price_cents)); }
+  } else if (!db.prepare('SELECT 1 FROM fares WHERE frequency_id=?').get(id)) throw httpError(400, 'Define las tarifas (matriz o tarifa completa)');
+  return id;
+});
+function freqCheck(b) {
+  if (!/^\d{2}:\d{2}$/.test(b.depart_time || '')) throw httpError(400, 'Hora de salida inválida (HH:MM)');
+  if (!(+b.duration_min >= 15)) throw httpError(400, 'Duración inválida');
+  if (b.days && !/^[01]{7}$/.test(b.days)) throw httpError(400, 'Días inválidos');
+}
+router.post('/coop/frequencies', write, (req, res) => { const cid = coopId(req); freqCheck(req.body); const id = saveFreq(cid, null, req.body); audit(req, 'create', 'frequencies', id); res.status(201).json(freqFull(db.prepare('SELECT * FROM frequencies WHERE id=?').get(id))); });
+router.put('/coop/frequencies/:id', write, (req, res) => { const cid = coopId(req), f = own('frequencies', req.params.id, cid); freqCheck(req.body); saveFreq(cid, f.id, req.body); audit(req, 'update', 'frequencies', f.id, f, req.body); res.json(freqFull(db.prepare('SELECT * FROM frequencies WHERE id=?').get(f.id))); });
+router.delete('/coop/frequencies/:id', write, fkGuard((req, res) => {
+  const f = own('frequencies', req.params.id, coopId(req));
+  if (db.prepare('SELECT 1 FROM trips WHERE frequency_id=? LIMIT 1').get(f.id)) { db.prepare('UPDATE frequencies SET active=0 WHERE id=?').run(f.id); return res.json({ ok: true, deactivated: true }); }
+  db.prepare('DELETE FROM frequencies WHERE id=?').run(f.id); audit(req, 'delete', 'frequencies', f.id); res.json({ ok: true });
+}));
+router.get('/coop/terminals', read, (req, res) => res.json(db.prepare('SELECT t.id,t.name,t.address,c.name AS city,c.id AS city_id,p.name AS province FROM terminals t JOIN cities c ON c.id=t.city_id JOIN provinces p ON p.id=c.province_id ORDER BY c.name').all()));
+
+/* ---------- Hojas de ruta (rotación) ---------- */
+function sheetInputs(cid, b) {
+  const group = own('bus_groups', b.group_id, cid);
+  const buses = db.prepare("SELECT id,number FROM buses WHERE coop_id=? AND group_id=? AND status='ACTIVO' ORDER BY number+0, number").all(cid, group.id);
+  let freqs = db.prepare('SELECT * FROM frequencies WHERE coop_id=? AND active=1 ORDER BY depart_time,id').all(cid);
+  if (Array.isArray(b.frequency_ids) && b.frequency_ids.length) freqs = b.frequency_ids.map(id => freqs.find(f => f.id === +id)).filter(Boolean);
+  const drivers = db.prepare("SELECT id FROM users WHERE coop_id=? AND role='DRIVER' AND active=1 ORDER BY id").all(cid);
+  const assistants = db.prepare("SELECT id FROM users WHERE coop_id=? AND role='ASSISTANT' AND active=1 ORDER BY id").all(cid);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(b.start_date || '') || !/^\d{4}-\d{2}-\d{2}$/.test(b.end_date || '') || b.end_date < b.start_date) throw httpError(400, 'Rango de fechas inválido');
+  if ((new Date(b.end_date) - new Date(b.start_date)) / 864e5 > 92) throw httpError(400, 'El rango máximo es de 93 días');
+  return { group, buses, freqs, drivers, assistants };
+}
+router.post('/coop/route-sheets/preview', write, (req, res) => {
+  const cid = coopId(req), b = req.body || {}, { buses, freqs, drivers, assistants } = sheetInputs(cid, b);
+  const r = generateRotation({ buses, frequencies: freqs, start: b.start_date, end: b.end_date, drivers, assistants });
+  const info = Object.fromEntries(freqs.map(f => [f.id, f]));
+  r.conflicts = findConflicts(r.entries, info, +b.rest_min || 60);
+  r.frequencies = freqs.map(f => ({ id: f.id, depart_time: f.depart_time, ...freqFull({ ...f }) }));
+  r.buses = buses;
+  res.json(r);
+});
+router.post('/coop/route-sheets', write, (req, res) => {
+  const cid = coopId(req), b = req.body || {}; sheetInputs(cid, b);
+  if (!Array.isArray(b.entries) || !b.entries.length) throw httpError(400, 'La hoja no tiene asignaciones');
+  const id = tx(() => {
+    const sid = db.prepare("INSERT INTO route_sheets(coop_id,group_id,start_date,end_date,mode,status,created_by,created_at) VALUES(?,?,?,?,?,'BORRADOR',?,?)").run(cid, b.group_id, b.start_date, b.end_date, b.mode || 'AUTO', req.user.id, nowLocal()).lastInsertRowid;
+    for (const e of b.entries) {
+      own('buses', e.bus_id, cid);
+      db.prepare('INSERT INTO route_sheet_entries(sheet_id,date,slot,frequency_id,bus_id,driver_id,assistant_id) VALUES(?,?,?,?,?,?,?)').run(sid, e.date, e.slot, e.frequency_id || null, e.bus_id, e.driver_id || null, e.assistant_id || null);
+    }
+    return sid;
+  })();
+  audit(req, 'create', 'route_sheets', id);
+  res.status(201).json({ id });
+});
+router.get('/coop/route-sheets', read, (req, res) => res.json(db.prepare(`SELECT r.*, g.name AS group_name, (SELECT COUNT(*) FROM route_sheet_entries e WHERE e.sheet_id=r.id) AS entries FROM route_sheets r JOIN bus_groups g ON g.id=r.group_id WHERE r.coop_id=? ORDER BY r.start_date DESC`).all(coopId(req))));
+function sheetDetail(s) {
+  s.entries = db.prepare(`SELECT e.*, b.number AS bus_number, f.depart_time, ot.name AS origin, dt.name AS dest, u.nombres||' '||u.apellidos AS driver, a.nombres||' '||a.apellidos AS assistant
+    FROM route_sheet_entries e JOIN buses b ON b.id=e.bus_id LEFT JOIN frequencies f ON f.id=e.frequency_id LEFT JOIN terminals ot ON ot.id=f.origin_terminal_id LEFT JOIN terminals dt ON dt.id=f.dest_terminal_id
+    LEFT JOIN users u ON u.id=e.driver_id LEFT JOIN users a ON a.id=e.assistant_id WHERE e.sheet_id=? ORDER BY e.date, e.slot`).all(s.id);
+  return s;
+}
+router.get('/coop/route-sheets/:id', read, (req, res) => res.json(sheetDetail(own('route_sheets', req.params.id, coopId(req)))));
+router.put('/coop/route-sheets/:id/entries/:eid', write, (req, res) => {
+  const cid = coopId(req), s = own('route_sheets', req.params.id, cid), e = db.prepare('SELECT * FROM route_sheet_entries WHERE id=? AND sheet_id=?').get(+req.params.eid, s.id);
+  if (!e) throw httpError(404, 'Asignación no encontrada');
+  const b = { ...e, ...req.body }; own('buses', b.bus_id, cid);
+  db.prepare('UPDATE route_sheet_entries SET bus_id=?, driver_id=?, assistant_id=?, frequency_id=? WHERE id=?').run(b.bus_id, b.driver_id || null, b.assistant_id || null, b.frequency_id || null, e.id);
+  res.json({ ok: true });
+});
+router.post('/coop/route-sheets/:id/publish', write, (req, res) => {
+  const cid = coopId(req), s = own('route_sheets', req.params.id, cid);
+  const entries = db.prepare('SELECT e.*, f.depart_time FROM route_sheet_entries e JOIN frequencies f ON f.id=e.frequency_id WHERE e.sheet_id=? AND e.frequency_id IS NOT NULL').all(s.id);
+  const info = Object.fromEntries(db.prepare('SELECT id,depart_time,duration_min FROM frequencies WHERE coop_id=?').all(cid).map(f => [f.id, f]));
+  const conflicts = findConflicts(entries, info, 0);
+  if (conflicts.length && !req.body.force) throw httpError(409, 'Hay conflictos: ' + conflicts.slice(0, 3).join('; '), 'CONFLICTS');
+  let created = 0, updated = 0, skipped = 0;
+  tx(() => {
+    for (const e of entries) {
+      const at = `${e.date} ${e.depart_time}:00`;
+      const ex = db.prepare('SELECT * FROM trips WHERE frequency_id=? AND date=? AND depart_at=?').get(e.frequency_id, e.date, at);
+      if (ex) {
+        const sold = db.prepare("SELECT 1 FROM tickets WHERE trip_id=? AND status IN ('RESERVADO','VALIDO','ABORDADO') LIMIT 1").get(ex.id);
+        if (sold && ex.bus_id !== e.bus_id) { skipped++; continue; }
+        db.prepare("UPDATE trips SET bus_id=?, driver_id=?, assistant_id=? WHERE id=? AND status='PROGRAMADO'").run(e.bus_id, e.driver_id, e.assistant_id, ex.id); updated++;
+      } else { db.prepare('INSERT INTO trips(frequency_id,bus_id,date,depart_at,driver_id,assistant_id) VALUES(?,?,?,?,?,?)').run(e.frequency_id, e.bus_id, e.date, at, e.driver_id, e.assistant_id); created++; }
+    }
+    db.prepare("UPDATE route_sheets SET status='PUBLICADA' WHERE id=?").run(s.id);
+  })();
+  audit(req, 'publish', 'route_sheets', s.id, null, { created, updated, skipped });
+  res.json({ created, updated, skipped });
+});
+router.delete('/coop/route-sheets/:id', write, (req, res) => {
+  const s = own('route_sheets', req.params.id, coopId(req));
+  if (s.status === 'PUBLICADA') throw httpError(409, 'La hoja ya fue publicada; los viajes existen. Cancela los viajes si es necesario.');
+  db.prepare('DELETE FROM route_sheets WHERE id=?').run(s.id); res.json({ ok: true });
+});
+router.get('/coop/route-sheets/:id/print', read, (req, res) => {
+  const s = sheetDetail(own('route_sheets', req.params.id, coopId(req))), dates = [...new Set(s.entries.map(e => e.date))];
+  const slots = [...new Set(s.entries.map(e => e.slot))].sort((a, b) => a - b), by = {};
+  s.entries.forEach(e => by[e.date + '|' + e.slot] = e);
+  const head = slots.map(sl => { const e = s.entries.find(x => x.slot === sl && x.frequency_id); return `<th>${e ? docs.esc(e.depart_time + ' ' + e.origin + '→' + e.dest) : 'PARADA'}</th>`; }).join('');
+  const rows = dates.map(d => `<tr><td><b>${d}</b></td>${slots.map(sl => { const e = by[d + '|' + sl]; return `<td>${e ? (e.frequency_id ? `Bus ${docs.esc(e.bus_number)}<br><small>${docs.esc(e.driver || '')}</small>` : `<i>Parada (Bus ${docs.esc(e.bus_number)})</i>`) : '-'}</td>`; }).join('')}</tr>`).join('');
+  res.type('html').send(docs.a4Page('Hoja de ruta', `<h1>Hoja de ruta ${s.start_date} a ${s.end_date}</h1><table><tr><th>Fecha</th>${head}</tr>${rows}</table><div class="sig"><div>Gerente</div><div>Despachador</div></div>`));
+});
+
+/* ---------- Viajes ---------- */
+router.get('/coop/trips', read, (req, res) => {
+  const cid = coopId(req), date = req.query.date || today();
+  core.expireOrders();
+  const rows = db.prepare(`SELECT t.id FROM trips t JOIN frequencies f ON f.id=t.frequency_id WHERE f.coop_id=? AND t.date BETWEEN ? AND ? ORDER BY t.depart_at`).all(cid, date, req.query.to || date);
+  res.json(rows.map(({ id }) => {
+    const t = core.getTrip(id), sold = db.prepare("SELECT COUNT(*) c, COALESCE(SUM(total_cents),0) s FROM tickets WHERE trip_id=? AND status IN ('VALIDO','ABORDADO','BAJO')").get(id);
+    const drv = t.driver_id ? db.prepare('SELECT nombres,apellidos FROM users WHERE id=?').get(t.driver_id) : null;
+    return { id, date: t.date, depart_at: t.depart_at, status: t.status, platform: t.platform, bus_id: t.bus_id, bus_number: t.bus_number, plate: t.plate, driver_id: t.driver_id, assistant_id: t.assistant_id, driver: drv ? drv.nombres + ' ' + drv.apellidos : null, origin: t.stops[0].city, dest: t.stops[t.stops.length - 1].city, capacity: t.capacity, sold: sold.c, revenue_cents: sold.s };
+  }));
+});
+router.post('/coop/trips', write, (req, res) => {
+  const cid = coopId(req), b = req.body || {}, f = own('frequencies', b.frequency_id, cid); own('buses', b.bus_id, cid);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(b.date || '')) throw httpError(400, 'Fecha inválida');
+  const id = db.prepare('INSERT INTO trips(frequency_id,bus_id,date,depart_at,driver_id,assistant_id,platform) VALUES(?,?,?,?,?,?,?)').run(f.id, b.bus_id, b.date, `${b.date} ${f.depart_time}:00`, b.driver_id || null, b.assistant_id || null, b.platform || null).lastInsertRowid;
+  audit(req, 'create', 'trips', id); res.status(201).json({ id });
+});
+router.put('/coop/trips/:id', write, (req, res) => {
+  const cid = coopId(req), t = db.prepare('SELECT t.*, f.coop_id FROM trips t JOIN frequencies f ON f.id=t.frequency_id WHERE t.id=?').get(+req.params.id);
+  if (!t || t.coop_id !== cid) throw httpError(404, 'Viaje no encontrado');
+  const b = { ...t, ...req.body };
+  if (b.bus_id !== t.bus_id) {
+    own('buses', b.bus_id, cid);
+    if (db.prepare("SELECT 1 FROM tickets WHERE trip_id=? AND status IN ('RESERVADO','VALIDO','ABORDADO') LIMIT 1").get(t.id)) throw httpError(409, 'Ya hay boletos vendidos: no se puede cambiar el bus');
+  }
+  db.prepare('UPDATE trips SET bus_id=?, driver_id=?, assistant_id=?, platform=? WHERE id=?').run(b.bus_id, b.driver_id || null, b.assistant_id || null, b.platform || null, t.id);
+  audit(req, 'update', 'trips', t.id, t, req.body); res.json({ ok: true });
+});
+router.post('/coop/trips/:id/cancel', write, (req, res) => {
+  const cid = coopId(req), t = db.prepare('SELECT t.*, f.coop_id FROM trips t JOIN frequencies f ON f.id=t.frequency_id WHERE t.id=?').get(+req.params.id);
+  if (!t || t.coop_id !== cid) throw httpError(404, 'Viaje no encontrado');
+  if (['EN_RUTA', 'FINALIZADO', 'CANCELADO'].includes(t.status)) throw httpError(409, 'El viaje no puede cancelarse en su estado actual');
+  const reason = String(req.body.reason || '').trim(); need(reason, 'Indica el motivo');
+  const orders = db.prepare("SELECT DISTINCT o.* FROM orders o WHERE o.trip_id=? AND o.status IN ('RESERVADO','EN_REVISION','PAGADO')").all(t.id);
+  tx(() => {
+    db.prepare("UPDATE trips SET status='CANCELADO', cancel_reason=? WHERE id=?").run(reason, t.id);
+    for (const o of orders) {
+      db.prepare("UPDATE tickets SET status='ANULADO', void_reason=?, voided_by=? WHERE order_id=? AND status IN ('RESERVADO','VALIDO')").run('Viaje cancelado: ' + reason, req.user.id, o.id);
+      db.prepare("UPDATE orders SET status='CANCELADO', note=? WHERE id=?").run('Viaje cancelado: ' + reason, o.id);
+      if (o.buyer_id) notify(o.buyer_id, 'Viaje cancelado', `El viaje de tu orden ${o.code} fue cancelado (${reason}). ${o.status === 'PAGADO' ? 'Contacta a la cooperativa para la devolución de tu dinero.' : ''}`, '#/orders');
+    }
+  })();
+  audit(req, 'cancel', 'trips', t.id, null, { reason, orders: orders.length });
+  res.json({ ok: true, orders: orders.length, refunds_pending: orders.filter(o => o.status === 'PAGADO').length });
+});
+
+/* ---------- Reportes ---------- */
+function range(req) { const to = req.query.to || today(), from = req.query.from || addDays(to, -29); return { from, to }; }
+router.get('/coop/dashboard', read, (req, res) => {
+  const cid = coopId(req), d = today(), m = d.slice(0, 7) + '-01';
+  const q = (sql, ...p) => db.prepare(sql).get(cid, ...p);
+  res.json({
+    today: q("SELECT COUNT(*) tickets, COALESCE(SUM(t.total_cents),0) revenue FROM tickets t JOIN orders o ON o.id=t.order_id WHERE o.coop_id=? AND t.status IN ('VALIDO','ABORDADO','BAJO') AND substr(o.paid_at,1,10)=?", d),
+    month: q("SELECT COUNT(*) tickets, COALESCE(SUM(t.total_cents),0) revenue FROM tickets t JOIN orders o ON o.id=t.order_id WHERE o.coop_id=? AND t.status IN ('VALIDO','ABORDADO','BAJO') AND substr(o.paid_at,1,10)>=?", m),
+    trips_today: q("SELECT COUNT(*) c FROM trips t JOIN frequencies f ON f.id=t.frequency_id WHERE f.coop_id=? AND t.date=?", d).c,
+    pending_payments: q("SELECT COUNT(*) c FROM payments p JOIN orders o ON o.id=p.order_id WHERE o.coop_id=? AND p.status='EN_REVISION'").c,
+    buses: db.prepare("SELECT status, COUNT(*) c FROM buses WHERE coop_id=? GROUP BY status").all(cid),
+    alerts: [
+      ...db.prepare("SELECT 'Revisión técnica por vencer: bus ' || number || ' (' || tech_review_expires || ')' a FROM buses WHERE coop_id=? AND status='ACTIVO' AND tech_review_expires IS NOT NULL AND tech_review_expires <= ?").all(cid, addDays(d, 30)).map(r => r.a),
+      ...db.prepare("SELECT 'Licencia por vencer: ' || nombres || ' ' || apellidos || ' (' || license_expires || ')' a FROM users WHERE coop_id=? AND role='DRIVER' AND active=1 AND license_expires IS NOT NULL AND license_expires <= ?").all(cid, addDays(d, 30)).map(r => r.a),
+    ],
+  });
+});
+router.get('/coop/reports/sales', read, (req, res) => {
+  const cid = coopId(req), { from, to } = range(req);
+  const base = "FROM tickets t JOIN orders o ON o.id=t.order_id JOIN trips tr ON tr.id=t.trip_id JOIN frequencies f ON f.id=tr.frequency_id WHERE o.coop_id=? AND t.status IN ('VALIDO','ABORDADO','BAJO') AND substr(o.paid_at,1,10) BETWEEN ? AND ?";
+  const out = {
+    from, to,
+    totals: db.prepare(`SELECT COUNT(*) tickets, COALESCE(SUM(t.total_cents),0) revenue, COALESCE(SUM(t.discount_cents),0) discounts, COALESCE(SUM(t.fee_cents),0) fees ${base}`).get(cid, from, to),
+    by_day: db.prepare(`SELECT substr(o.paid_at,1,10) day, COUNT(*) tickets, SUM(t.total_cents) revenue ${base} GROUP BY 1 ORDER BY 1`).all(cid, from, to),
+    by_channel: db.prepare(`SELECT o.channel, COUNT(*) tickets, SUM(t.total_cents) revenue ${base} GROUP BY 1`).all(cid, from, to),
+    by_method: db.prepare(`SELECT COALESCE(o.method,'-') method, COUNT(*) tickets, SUM(t.total_cents) revenue ${base} GROUP BY 1`).all(cid, from, to),
+    by_category: db.prepare(`SELECT t.category, COUNT(*) tickets, SUM(t.total_cents) revenue ${base} GROUP BY 1`).all(cid, from, to),
+    by_route: db.prepare(`SELECT oc.name||' → '||dc.name route, COUNT(*) tickets, SUM(t.total_cents) revenue ${base.replace('WHERE', 'JOIN terminals ot ON ot.id=f.origin_terminal_id JOIN cities oc ON oc.id=ot.city_id JOIN terminals dt ON dt.id=f.dest_terminal_id JOIN cities dc ON dc.id=dt.city_id WHERE')} GROUP BY 1 ORDER BY revenue DESC LIMIT 15`).all(cid, from, to),
+    by_office: db.prepare(`SELECT COALESCE(of.name,'(en línea / ruta)') office, COUNT(*) tickets, SUM(t.total_cents) revenue ${base.replace('WHERE', 'LEFT JOIN offices of ON of.id=o.office_id WHERE')} GROUP BY 1 ORDER BY revenue DESC`).all(cid, from, to),
+    occupancy: db.prepare(`SELECT ROUND(100.0*SUM(sold)/NULLIF(SUM(cap),0),1) pct FROM (SELECT (SELECT COUNT(*) FROM tickets x WHERE x.trip_id=tr.id AND x.status IN ('VALIDO','ABORDADO','BAJO')) sold, b.capacity cap FROM trips tr JOIN frequencies f ON f.id=tr.frequency_id JOIN buses b ON b.id=tr.bus_id WHERE f.coop_id=? AND tr.date BETWEEN ? AND ? AND tr.status<>'CANCELADO')`).get(cid, from, to).pct,
+    no_show: db.prepare("SELECT COUNT(*) c FROM tickets t JOIN trips tr ON tr.id=t.trip_id JOIN frequencies f ON f.id=tr.frequency_id WHERE f.coop_id=? AND tr.date BETWEEN ? AND ? AND tr.status='FINALIZADO' AND t.status='VALIDO'").get(cid, from, to).c,
+  };
+  if (req.query.format === 'csv') {
+    const rows = [['fecha', 'boletos', 'ingresos_usd'], ...out.by_day.map(r => [r.day, r.tickets, (r.revenue / 100).toFixed(2)])];
+    res.type('text/csv').attachment(`ventas_${from}_${to}.csv`).send('﻿' + rows.map(r => r.join(';')).join('\n'));
+  } else res.json(out);
+});
+router.get('/coop/audit', read, (req, res) => {
+  const cid = coopId(req);
+  res.json(db.prepare('SELECT a.* FROM audit_logs a LEFT JOIN users u ON u.id=a.user_id WHERE u.coop_id=? ORDER BY a.id DESC LIMIT 300').all(cid));
+});
+router.get('/coop/incidents', read, (req, res) => res.json(db.prepare(`SELECT i.*, t.date, b.number AS bus_number FROM incidents i JOIN trips t ON t.id=i.trip_id JOIN frequencies f ON f.id=t.frequency_id JOIN buses b ON b.id=t.bus_id WHERE f.coop_id=? ORDER BY i.id DESC LIMIT 200`).all(coopId(req))));
+module.exports = router; module.exports.genLayout = genLayout; module.exports.syncSeats = syncSeats; module.exports.autoFares = autoFares;
