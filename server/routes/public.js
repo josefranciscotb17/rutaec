@@ -1,9 +1,17 @@
 const router = require('express').Router();
+const rateLimit = require('express-rate-limit');
 const { db } = require('../db');
 const S = require('../lib/settings');
 const core = require('../lib/core');
 const { nowLocal, diffMinutes, httpError, hhmm } = require('../lib/util');
 const { hmac } = require('../lib/auth');
+
+const verifyLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 router.get('/config', (req, res) => res.json({ ...S.publicConfig(), demo: process.env.DEMO_MODE !== 'false' }));
 
@@ -83,5 +91,5 @@ function verify(code) {
   const ok = ['VALIDO', 'ABORDADO'].includes(f.status);
   return { valid: ok, status: f.status, reason: ok ? null : 'Boleto ' + f.status.toLowerCase(), coop: f.coop.name, route: `${f.from.city} - ${f.to.city}`, depart_at: f.depart_at_stop, seat: f.seat_label, number: f.number };
 }
-router.get('/verify/:code', (req, res) => res.json(verify(req.params.code)));
+router.get('/verify/:code', verifyLimiter, (req, res) => res.json(verify(req.params.code)));
 module.exports = router; module.exports.verify = verify;
