@@ -8,7 +8,7 @@ const { requireRole, coopId } = require('../lib/auth');
 const { notify, audit } = require('../lib/notify');
 const { generateRotation, findConflicts } = require('../lib/rotation');
 const { imageUpload, saveImage } = require('../lib/upload');
-const { nowLocal, today, httpError, validCedula, validEmail, validPlate, validRuc, randCode } = require('../lib/util');
+const { nowLocal, today, addDays, httpError, validCedula, validEmail, validPlate, validRuc, randCode } = require('../lib/util');
 
 const read = requireRole('COOP_ADMIN', 'AUDITOR');
 const write = requireRole('COOP_ADMIN');
@@ -382,6 +382,24 @@ router.post('/coop/trips/:id/cancel', write, (req, res) => {
   })();
   audit(req, 'cancel', 'trips', t.id, null, { reason, orders: orders.length });
   res.json({ ok: true, orders: orders.length, refunds_pending: orders.filter(o => o.status === 'PAGADO').length });
+});
+
+/* ---------- Reportes ---------- */
+function range(req) { const to = req.query.to || today(), from = req.query.from || addDays(to, -29); return { from, to }; }
+router.get('/coop/dashboard', read, (req, res) => {
+  const cid = coopId(req), d = today(), m = d.slice(0, 7) + '-01';
+  const q = (sql, ...p) => db.prepare(sql).get(cid, ...p);
+  res.json({
+    today: q("SELECT COUNT(*) tickets, COALESCE(SUM(t.total_cents),0) revenue FROM tickets t JOIN orders o ON o.id=t.order_id WHERE o.coop_id=? AND t.status IN ('VALIDO','ABORDADO','BAJO') AND substr(o.paid_at,1,10)=?", d),
+    month: q("SELECT COUNT(*) tickets, COALESCE(SUM(t.total_cents),0) revenue FROM tickets t JOIN orders o ON o.id=t.order_id WHERE o.coop_id=? AND t.status IN ('VALIDO','ABORDADO','BAJO') AND substr(o.paid_at,1,10)>=?", m),
+    trips_today: q("SELECT COUNT(*) c FROM trips t JOIN frequencies f ON f.id=t.frequency_id WHERE f.coop_id=? AND t.date=?", d).c,
+    pending_payments: q("SELECT COUNT(*) c FROM payments p JOIN orders o ON o.id=p.order_id WHERE o.coop_id=? AND p.status='EN_REVISION'").c,
+    buses: db.prepare("SELECT status, COUNT(*) c FROM buses WHERE coop_id=? GROUP BY status").all(cid),
+    alerts: [
+      ...db.prepare("SELECT 'Revisión técnica por vencer: bus ' || number || ' (' || tech_review_expires || ')' a FROM buses WHERE coop_id=? AND status='ACTIVO' AND tech_review_expires IS NOT NULL AND tech_review_expires <= ?").all(cid, addDays(d, 30)).map(r => r.a),
+      ...db.prepare("SELECT 'Licencia por vencer: ' || nombres || ' ' || apellidos || ' (' || license_expires || ')' a FROM users WHERE coop_id=? AND role='DRIVER' AND active=1 AND license_expires IS NOT NULL AND license_expires <= ?").all(cid, addDays(d, 30)).map(r => r.a),
+    ],
+  });
 });
 
 module.exports = router; module.exports.genLayout = genLayout; module.exports.syncSeats = syncSeats; module.exports.autoFares = autoFares;
