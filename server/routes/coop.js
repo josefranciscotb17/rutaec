@@ -195,4 +195,58 @@ router.put('/coop/buses/:id/seats', write, (req, res) => {
   syncSeats(b, layout); audit(req, 'update_seats', 'buses', b.id); res.json({ ok: true });
 });
 
-module.exports = router; module.exports.genLayout = genLayout; module.exports.syncSeats = syncSeats;
+/* ---------- Frecuencias, paradas y tarifas ---------- */
+function freqFull(f) {
+  f.stops = db.prepare('SELECT s.ord,s.terminal_id,s.minutes,s.km,tm.name AS terminal,ci.name AS city FROM frequency_stops s JOIN terminals tm ON tm.id=s.terminal_id JOIN cities ci ON ci.id=tm.city_id WHERE s.frequency_id=? ORDER BY s.ord').all(f.id);
+  f.fares = db.prepare('SELECT from_ord,to_ord,price_cents FROM fares WHERE frequency_id=? ORDER BY from_ord,to_ord').all(f.id);
+  f.origin = f.stops[0] && f.stops[0].city; f.dest = f.stops.length ? f.stops[f.stops.length - 1].city : null;
+  return f;
+}
+router.get('/coop/frequencies', read, (req, res) => res.json(db.prepare('SELECT * FROM frequencies WHERE coop_id=? ORDER BY depart_time, id').all(coopId(req)).map(freqFull)));
+/** Tarifa completa -> matriz proporcional a los km (redondeo a 5 centavos, mínimo $0.50) */
+function autoFares(stops, fullCents) {
+  const totalKm = stops[stops.length - 1].km || stops.length - 1, out = [];
+  for (let a = 0; a < stops.length; a++) for (let b = a + 1; b < stops.length; b++) {
+    const share = (stops[b].km - stops[a].km) / (totalKm || 1);
+    out.push({ from_ord: a, to_ord: b, price_cents: Math.max(50, Math.round(fullCents * share / 5) * 5) });
+  }
+  return out;
+}
+const saveFreq = tx((cid, id, b) => {
+  const f = [b.origin_terminal_id, b.dest_terminal_id];
+  const stops = (b.stops || []).map((s, i) => ({ terminal_id: +s.terminal_id, minutes: +s.minutes || 0, km: +s.km || 0, ord: i }));
+  if (stops.length < 2) throw httpError(400, 'Define al menos origen y destino');
+  if (new Set(stops.map(s => s.terminal_id)).size !== stops.length) throw httpError(400, 'Una terminal se repite en la ruta');
+  stops[0].minutes = 0; stops[0].km = 0; stops[stops.length - 1].minutes = +b.duration_min;
+  for (let i = 1; i < stops.length; i++) if (stops[i].minutes <= stops[i - 1].minutes || stops[i].km < stops[i - 1].km) throw httpError(400, 'Los minutos y km de las paradas deben ser crecientes');
+  const vals = [stops[0].terminal_id, stops[stops.length - 1].terminal_id, b.depart_time, +b.duration_min, stops.length > 2 ? 'CON_PARADAS' : (b.kind || 'DIRECTA'), b.resolution_number || null, b.resolution_date || null, b.days || '1111111', b.active === 0 || b.active === false ? 0 : 1];
+  if (id) db.prepare('UPDATE frequencies SET origin_terminal_id=?,dest_terminal_id=?,depart_time=?,duration_min=?,kind=?,resolution_number=?,resolution_date=?,days=?,active=? WHERE id=?').run(...vals, id);
+  else id = db.prepare('INSERT INTO frequencies(origin_terminal_id,dest_terminal_id,depart_time,duration_min,kind,resolution_number,resolution_date,days,active,coop_id) VALUES(?,?,?,?,?,?,?,?,?,?)').run(...vals, cid).lastInsertRowid;
+  const hasTickets = db.prepare('SELECT 1 FROM tickets t JOIN trips tr ON tr.id=t.trip_id WHERE tr.frequency_id=? LIMIT 1').get(id);
+  const oldN = db.prepare('SELECT COUNT(*) c FROM frequency_stops WHERE frequency_id=?').get(id).c;
+  if (hasTickets && oldN !== stops.length) throw httpError(409, 'La frecuencia ya tiene boletos: no se puede cambiar el número de paradas');
+  db.prepare('DELETE FROM frequency_stops WHERE frequency_id=?').run(id);
+  for (const s of stops) db.prepare('INSERT INTO frequency_stops(frequency_id,ord,terminal_id,minutes,km) VALUES(?,?,?,?,?)').run(id, s.ord, s.terminal_id, s.minutes, s.km);
+  let fares = b.fares;
+  if (!fares && b.auto_fare_cents) fares = autoFares(stops, +b.auto_fare_cents);
+  if (fares) {
+    db.prepare('DELETE FROM fares WHERE frequency_id=?').run(id);
+    for (const r of fares) { if (!(r.price_cents > 0)) throw httpError(400, 'Toda tarifa debe ser mayor a 0'); db.prepare('INSERT INTO fares(frequency_id,from_ord,to_ord,price_cents) VALUES(?,?,?,?)').run(id, r.from_ord, r.to_ord, Math.round(r.price_cents)); }
+  } else if (!db.prepare('SELECT 1 FROM fares WHERE frequency_id=?').get(id)) throw httpError(400, 'Define las tarifas (matriz o tarifa completa)');
+  return id;
+});
+function freqCheck(b) {
+  if (!/^\d{2}:\d{2}$/.test(b.depart_time || '')) throw httpError(400, 'Hora de salida inválida (HH:MM)');
+  if (!(+b.duration_min >= 15)) throw httpError(400, 'Duración inválida');
+  if (b.days && !/^[01]{7}$/.test(b.days)) throw httpError(400, 'Días inválidos');
+}
+router.post('/coop/frequencies', write, (req, res) => { const cid = coopId(req); freqCheck(req.body); const id = saveFreq(cid, null, req.body); audit(req, 'create', 'frequencies', id); res.status(201).json(freqFull(db.prepare('SELECT * FROM frequencies WHERE id=?').get(id))); });
+router.put('/coop/frequencies/:id', write, (req, res) => { const cid = coopId(req), f = own('frequencies', req.params.id, cid); freqCheck(req.body); saveFreq(cid, f.id, req.body); audit(req, 'update', 'frequencies', f.id, f, req.body); res.json(freqFull(db.prepare('SELECT * FROM frequencies WHERE id=?').get(f.id))); });
+router.delete('/coop/frequencies/:id', write, fkGuard((req, res) => {
+  const f = own('frequencies', req.params.id, coopId(req));
+  if (db.prepare('SELECT 1 FROM trips WHERE frequency_id=? LIMIT 1').get(f.id)) { db.prepare('UPDATE frequencies SET active=0 WHERE id=?').run(f.id); return res.json({ ok: true, deactivated: true }); }
+  db.prepare('DELETE FROM frequencies WHERE id=?').run(f.id); audit(req, 'delete', 'frequencies', f.id); res.json({ ok: true });
+}));
+router.get('/coop/terminals', read, (req, res) => res.json(db.prepare('SELECT t.id,t.name,t.address,c.name AS city,c.id AS city_id,p.name AS province FROM terminals t JOIN cities c ON c.id=t.city_id JOIN provinces p ON p.id=c.province_id ORDER BY c.name').all()));
+
+module.exports = router; module.exports.genLayout = genLayout; module.exports.syncSeats = syncSeats; module.exports.autoFares = autoFares;
