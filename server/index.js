@@ -24,6 +24,12 @@ app.use(helmet({
 }));
 app.use(express.json({ limit: '1mb' }));
 app.use('/api', rateLimit({ windowMs: 60 * 1000, limit: +(process.env.RATE_LIMIT || 600), standardHeaders: true, legacyHeaders: false }));
+const verifyViewLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: +(process.env.VERIFY_RATE_LIMIT || 120),
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 app.use('/api', loadUser);
 app.use('/api/auth', require('./routes/auth'));
 // Cada módulo del sistema es un archivo en server/routes/: se cargan todos los que existan (excepto auth)
@@ -34,7 +40,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true, time: require('./lib/u
 app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
 
 /** Página pública que abre el celular al escanear el QR de un boleto */
-app.get('/v/:code', (req, res) => {
+app.get('/v/:code', verifyViewLimiter, (req, res) => {
   const r = verify(req.params.code), cfg = S.all();
   const color = r.valid ? '#1b7f3b' : '#b3261e';
   res.type('html').send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verificación de boleto - ${docs.esc(cfg.site_name)}</title>
