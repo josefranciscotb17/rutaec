@@ -5,7 +5,8 @@ const fs = require('fs'), path = require('path');
 const { db, tx, UPLOADS } = require('../db');
 const S = require('../lib/settings');
 const core = require('../lib/core');
-const { requireAuth } = require('../lib/auth');
+const docs = require('../lib/docs');
+const { requireAuth, requireRole } = require('../lib/auth');
 const { notify, notifyRole, audit } = require('../lib/notify');
 const { nowLocal, addMinutes, diffMinutes, httpError, money } = require('../lib/util');
 
@@ -121,4 +122,55 @@ router.get('/files/:name', requireAuth, (req, res) => {
   res.sendFile(path.join(PRIV, name));
 });
 
-module.exports = router; module.exports.orderDetail = orderDetail;
+/* ---------------- Boletos ---------------- */
+function ticketAccess(req, id) {
+  const t = core.ticketFull(+id);
+  if (!t) throw httpError(404, 'Boleto no encontrado');
+  const u = req.user;
+  if (!(t.buyer_id === u.id || ['SUPERADMIN', 'AUDITOR'].includes(u.role) || (['COOP_ADMIN', 'OFFICE'].includes(u.role) && u.coop_id === t.coop_id))) throw httpError(403, 'No tienes acceso a este boleto');
+  return t;
+}
+function publicTicket(t) {
+  return { id: t.id, number: t.number, code: t.code, short_code: t.short_code, status: t.status, order_code: t.order_code, seat_label: t.seat_label, seat_type: t.seat_type, category: t.category,
+    nombres: t.nombres, apellidos: t.apellidos, cedula_masked: core.maskCedula(t.cedula), total_cents: t.total_cents, base_cents: t.base_cents, discount_cents: t.discount_cents, fee_cents: t.fee_cents,
+    from: t.from, to: t.to, depart_at: t.depart_at_stop, arrive_at: t.arrive_at_stop, coop: t.coop.name, coop_color: t.coop.color, bus_number: t.trip.bus_number, plate: t.trip.plate, platform: t.trip.platform,
+    trip_id: t.trip_id, trip_status: t.trip.status, kind: t.trip.kind, boarded_at: t.boarded_at, method: t.method, channel: t.channel };
+}
+router.get('/tickets/mine', requireAuth, (req, res) => {
+  core.expireOrders();
+  const rows = db.prepare(`SELECT t.id FROM tickets t JOIN orders o ON o.id=t.order_id WHERE o.buyer_id=? AND t.status IN ('VALIDO','ABORDADO','BAJO','ANULADO','NO_SHOW') ORDER BY t.created_at DESC, t.id DESC LIMIT 200`).all(req.user.id);
+  res.json(rows.map(r => publicTicket(core.ticketFull(r.id))));
+});
+router.get('/tickets/:id', requireAuth, (req, res) => res.json(publicTicket(ticketAccess(req, req.params.id))));
+router.get('/tickets/:id/qr.png', requireAuth, async (req, res) => { const t = ticketAccess(req, req.params.id); res.type('png').send(await docs.qrPng(docs.qrUrl(base(req), t.code), 480)); });
+router.get('/tickets/:id/pdf', requireAuth, async (req, res) => {
+  const t = ticketAccess(req, req.params.id);
+  if (!['VALIDO', 'ABORDADO', 'BAJO', 'ANULADO', 'NO_SHOW'].includes(t.status)) throw httpError(409, 'El boleto aún no ha sido emitido');
+  res.type('pdf').set('Content-Disposition', `inline; filename="boleto-${t.number || t.id}.pdf"`);
+  await docs.ticketPdf([t], base(req), res);
+});
+router.get('/orders/:id/pdf', requireAuth, async (req, res) => {
+  const o = loadOrder(req, req.params.id);
+  const ids = db.prepare("SELECT id FROM tickets WHERE order_id=? AND status IN ('VALIDO','ABORDADO','BAJO')").all(o.id);
+  if (!ids.length) throw httpError(409, 'La orden no tiene boletos emitidos');
+  res.type('pdf').set('Content-Disposition', `inline; filename="boletos-${o.code}.pdf"`);
+  await docs.ticketPdf(ids.map(r => core.ticketFull(r.id)), base(req), res);
+});
+async function printTickets(req, res, ids) {
+  const tickets = ids.map(core.ticketFull);
+  const width = +req.query.w === 58 ? 58 : 80, reprint = req.query.reprint === '1';
+  let copy = 1;
+  for (const t of tickets) {
+    copy = db.prepare("SELECT COUNT(*)+1 n FROM print_jobs WHERE ticket_id=? AND doc_type='BOLETO'").get(t.id).n;
+    db.prepare('INSERT INTO print_jobs(ticket_id,order_id,doc_type,user_id,copy_n,reason,created_at) VALUES(?,?,?,?,?,?,?)').run(t.id, t.order_id, 'BOLETO', req.user.id, copy, req.query.reason || (reprint ? 'Reimpresión' : null), nowLocal());
+  }
+  res.type('html').send(await docs.thermalHtml(tickets, base(req), { width, auto: req.query.auto === '1', copy, reprint: reprint || copy > 1 }));
+}
+const office = [requireAuth, requireRole('OFFICE', 'COOP_ADMIN')];
+router.get('/tickets/:id/print', ...office, async (req, res) => { const t = ticketAccess(req, req.params.id); await printTickets(req, res, [t.id]); });
+router.get('/orders/:id/print', ...office, async (req, res) => {
+  const o = loadOrder(req, req.params.id);
+  await printTickets(req, res, db.prepare("SELECT id FROM tickets WHERE order_id=? AND status IN ('VALIDO','ABORDADO')").all(o.id).map(r => r.id));
+});
+
+module.exports = router; module.exports.orderDetail = orderDetail; module.exports.publicTicket = publicTicket;
