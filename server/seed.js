@@ -9,7 +9,7 @@ const S = require('./lib/settings');
 const core = require('./lib/core');
 const { genLayout, syncSeats, autoFares } = require('./routes/coop');
 const { generateRotation } = require('./lib/rotation');
-const { nowLocal, today, addDays, addMinutes, makeCedula } = require('./lib/util');
+const { nowLocal, today, addDays, addMinutes, makeCedula, randCode } = require('./lib/util');
 
 const PASS = 'Demo1234!';
 let seedN = 20260101;
@@ -184,6 +184,61 @@ async function run({ force = false } = {}) {
       }
       return oid;
     }
+    const freeSeats = (tripId, a, b, n) => core.seatMap(tripId, a, b).seats.filter(s => s.status === 'libre').sort(() => rnd() - 0.5).slice(0, n).map(s => s.id);
+    const tripsOf = (cid) => db.prepare('SELECT t.id, t.date, t.frequency_id FROM trips t JOIN frequencies f ON f.id=t.frequency_id WHERE f.coop_id=? ORDER BY t.date, t.depart_at').all(cid);
+    for (const C of COOPS) {
+      const { cid } = ctx[C.key];
+      for (const t of tripsOf(cid)) {
+        const stops = core.getTrip(t.id).stops, last = stops.length - 1;
+        const occ = t.date < T ? 0.35 + rnd() * 0.45 : t.date <= addDays(T, 3) ? 0.15 + rnd() * 0.45 : rnd() * 0.2;
+        const cap = db.prepare('SELECT capacity FROM buses b JOIN trips x ON x.bus_id=b.id WHERE x.id=?').get(t.id).capacity;
+        let left = Math.floor(cap * occ);
+        while (left > 0) {
+          const n = Math.min(left, 1 + Math.floor(rnd() * 3));
+          const a = stops.length > 2 && rnd() < 0.3 ? Math.floor(rnd() * (last - 1)) : 0, b = stops.length > 2 && rnd() < 0.3 ? a + 1 + Math.floor(rnd() * (last - a)) : last;
+          const seats = freeSeats(t.id, a, b, n); if (!seats.length) break;
+          const webby = rnd() < 0.45, buyer = webby ? filler[Math.floor(rnd() * filler.length)] : null;
+          try { mkPaid({ tripId: t.id, from: a, to: b, seatIds: seats, key: C.key, buyer, channel: webby ? 'WEB' : 'OFICINA', method: webby ? pick(['TRANSFERENCIA', 'DEPOSITO']) : 'EFECTIVO' }); } catch (e) { if (!/ya tiene|misma/.test(e.message)) throw e; }
+          left -= seats.length;
+        }
+      }
+    }
+
+    // Casos concretos para probar flujos: mañana, ruta Quito → Cuenca 07:00 (Andina)
+    const A = ctx.andina, tomorrow = addDays(T, 1);
+    const tripA = db.prepare("SELECT t.id FROM trips t JOIN frequencies f ON f.id=t.frequency_id WHERE f.coop_id=? AND t.date=? AND f.depart_time='13:00' AND f.origin_terminal_id=?").get(A.cid, tomorrow, TQ);
+    if (tripA) {
+      const mkOrder = (buyer, n, a, b) => {
+        const u = db.prepare('SELECT * FROM users WHERE id=?').get(buyer), seats = freeSeats(tripA.id, a, b, n);
+        const ps = seats.map((sid, i) => i === 0 ? { seatId: sid, cedula: newCedula(), nombres: u.nombres, apellidos: u.apellidos, email: u.email, phone: u.phone, category: 'ADULTO' } : { seatId: sid, cedula: newCedula(), nombres: pick(NOMBRES), apellidos: pick(APELLIDOS), email: u.email, category: i === 1 ? 'MENOR' : 'ADULTO' });
+        return core.createOrder({ tripId: tripA.id, from: a, to: b, passengers: ps, buyerId: buyer, channel: 'WEB', expiresMinutes: 60 });
+      };
+      // 1) Comprobante en revisión (el oficinista debe aprobar/rechazar)
+      const o1 = mkOrder(clients[1], 2, 0, 3), ord1 = db.prepare('SELECT * FROM orders WHERE id=?').get(o1);
+      const pf = 'seed-proof-' + randCode(6) + '.pdf'; fs.mkdirSync(path.join(UPLOADS, 'private'), { recursive: true }); proofJob = { pf, ref: 'DEMO-778812', amount: (ord1.total_cents / 100).toFixed(2) };
+      ins("INSERT INTO payments(order_id,method,amount_cents,status,bank,reference,paid_date,proof_file,proof_hash,created_at) VALUES(?,'TRANSFERENCIA',?,'EN_REVISION','Banco Pichincha','DEMO-778812',?,?,?,?)", o1, ord1.total_cents, T, pf, 'seedhash-' + o1, nowLocal());
+      db.prepare("UPDATE orders SET status='EN_REVISION', method='TRANSFERENCIA', expires_at=NULL WHERE id=?").run(o1);
+      // 2) Reserva para pagar en efectivo en oficina (con código R…)
+      const o2 = mkOrder(clients[2], 1, 0, 2);
+      db.prepare("UPDATE orders SET method='EFECTIVO', expires_at=? WHERE id=?").run(addMinutes(nowLocal(), 55), o2);
+      ins("INSERT INTO payments(order_id,method,amount_cents,status,created_at) VALUES(?,'EFECTIVO',(SELECT total_cents FROM orders WHERE id=?),'PENDIENTE',?)", o2, o2, nowLocal());
+      // 3) Boleto pagado del cliente demo
+      mkPaid({ tripId: tripA.id, from: 0, to: 4, seatIds: freeSeats(tripA.id, 0, 4, 1), key: 'andina', buyer: clients[0], channel: 'WEB', method: 'TRANSFERENCIA' });
+    }
+    // Boletos del cliente demo también en un viaje de hoy o pasado para probar "Mis boletos" y el escáner
+    const todayTrip = db.prepare("SELECT t.id FROM trips t JOIN frequencies f ON f.id=t.frequency_id WHERE f.coop_id=? AND t.date=? ORDER BY t.depart_at DESC LIMIT 1").get(A.cid, T);
+    if (todayTrip) mkPaid({ tripId: todayTrip.id, from: 0, to: core.getTrip(todayTrip.id).stops.length - 1, seatIds: freeSeats(todayTrip.id, 0, core.getTrip(todayTrip.id).stops.length - 1, 1), key: 'andina', buyer: clients[0], channel: 'WEB', method: 'TRANSFERENCIA' });
+
+    // Los viajes de días pasados se cierran una vez cargadas sus ventas históricas
+    db.prepare(`UPDATE trips SET status='FINALIZADO', started_at=depart_at, finished_at=datetime(depart_at, '+' || (SELECT duration_min FROM frequencies f WHERE f.id=trips.frequency_id) || ' minutes') WHERE date < ?`).run(T);
+    // Calificaciones, incidencias y avisos
+    const past = db.prepare("SELECT id FROM trips WHERE status='FINALIZADO' ORDER BY id LIMIT 12").all();
+    past.forEach((t, i) => ins('INSERT OR IGNORE INTO ratings(trip_id,user_id,stars,comment,created_at) VALUES(?,?,?,?,?)', t.id, clients[i % clients.length], 3 + (i % 3), pick(['Puntual y cómodo', 'Buen servicio', 'El bus salió con retraso pero el trato fue excelente', 'Todo bien']), nowLocal()));
+    if (past[0]) ins("INSERT INTO incidents(trip_id,user_id,kind,detail,created_at) VALUES(?,?,?,?,?)", past[0].id, null, 'RETRASO', 'Tráfico en la vía por derrumbe, 25 minutos de demora', nowLocal());
+    ins("INSERT INTO notifications(user_id,title,body,link,created_at) VALUES(?,?,?,?,?)", clients[0], 'Bienvenido a RutaEC', 'Tu cuenta de demostración está lista. Busca un viaje y prueba el flujo completo de compra.', '#/', nowLocal());
+    // Caja de ayer cerrada (ejemplo para el historial)
+    const ou = officeUser('andina');
+    ins('INSERT INTO cash_sessions(user_id,office_id,opened_at,closed_at,opening_cents,expected_cents,counted_cents,note) VALUES(?,?,?,?,5000,12500,12500,?)', ou.id, ou.office_id, `${addDays(T, -1)} 06:00:00`, `${addDays(T, -1)} 18:00:00`, 'Cierre sin novedades');
   })();
 
   if (proofJob) fs.writeFileSync(path.join(UPLOADS, 'private', proofJob.pf), await proofPdf(proofJob.ref, proofJob.amount));
