@@ -126,3 +126,45 @@ App.A.createOrder = async (f) => {
 };
 
 /* ---------- Pago ---------- */
+let CK = null;
+route('/checkout/:id', async (p) => { CK = { id: p.id, bank: null }; await drawCheckout(); every(tickCheckout, 1000); every(pollCheckout, 10000); }, ['CLIENT']);
+async function drawCheckout() {
+  const o = await api('/orders/' + CK.id); CK.o = o; CK.end = o.seconds_left != null ? Date.now() + o.seconds_left * 1000 : null;
+  const t = o.trip, last = o.payments[o.payments.length - 1];
+  const head = html`<div class="steps"><span class="done">1 · Asientos</span><span class="done">2 · Pasajeros</span><span class="${o.status === 'PAGADO' ? 'done' : 'on'}">3 · Pago</span><span class="${o.status === 'PAGADO' ? 'on' : ''}">4 · Boleto</span></div>`;
+  const summary = html`<div class="card"><div class="row spread"><h3>Orden ${o.code}</h3>${chip(o.status)}</div><div class="route mt"><div>${t.origin}</div><span>→</span><div>${t.dest}</div></div><div class="muted small">${o.coop_name} · ${fdt(o.depart_at_stop)} · Bus ${t.bus_number}</div>
+    <table class="mt">${o.tickets.map((x) => html`<tr><td>Asiento <b>${x.seat_label}</b> · ${x.nombres} ${x.apellidos}<div class="small muted">${CAT[x.category]}</div></td><td class="right">${money(x.total_cents)}</td></tr>`)}
+    <tr><td class="muted">Subtotal</td><td class="right">${money(o.subtotal_cents)}</td></tr>${o.discount_cents ? html`<tr><td class="muted">Descuentos</td><td class="right">-${money(o.discount_cents)}</td></tr>` : ''}<tr><td class="muted">Tasa de terminal</td><td class="right">${money(o.fee_cents)}</td></tr><tr><td><b>Total a pagar</b></td><td class="right"><b style="font-size:1.2rem">${money(o.total_cents)}</b></td></tr></table></div>`;
+  let main;
+  if (o.status === 'PAGADO') main = html`<div class="card center"><div style="font-size:3rem">🎉</div><h2>¡Pago confirmado!</h2><p>Tus boletos están listos. Muestra el código QR desde tu celular al abordar.</p><div class="row" style="justify-content:center"><a class="btn lg" href="#/tickets">Ver mis boletos</a><button class="btn sec lg" data-act="orderPdf" data-id="${o.id}">Descargar PDF</button></div></div>`;
+  else if (o.status === 'EN_REVISION') main = html`<div class="card center"><div style="font-size:3rem">⏳</div><h2>Comprobante en revisión</h2><p>Un oficinista de la cooperativa validará tu pago. El tiempo de reserva está detenido. Te avisaremos por correo y notificación.</p><span class="spinner"></span><div class="small muted mt">Esta página se actualiza sola.</div></div>`;
+  else if (o.status === 'RESERVADO') main = payPanel(o, last);
+  else main = html`<div class="card center">${empty(o.status === 'EXPIRADO' ? 'Esta reserva expiró y los asientos fueron liberados.' : 'Esta orden fue cancelada.', '⌛')}<a class="btn" href="#/">Buscar otro viaje</a></div>`;
+  paint(view(), html`${head}<div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);align-items:start" id="ckGrid">${summary}${main}</div>`);
+  if (window.innerWidth < 900) $('#ckGrid').style.gridTemplateColumns = '1fr';
+}
+function payPanel(o, last) {
+  const cash = o.method === 'EFECTIVO' && o.expires_at;
+  const timer = o.expires_at ? html`<div class="center"><div class="small muted">${cash ? 'Reserva válida hasta' : 'Tiempo para pagar'}</div><div class="timer" id="timer">--:--</div></div>` : '';
+  const rej = last && last.status === 'RECHAZADO' && last.reject_reason && !/Método cambiado|Reemplazado|Cobrado|expirada/.test(last.reject_reason) ? html`<div class="alert err"><b>Pago rechazado:</b> ${last.reject_reason}. Corrige y vuelve a enviar tu comprobante antes de que termine el tiempo.</div>` : '';
+  if (cash) return html`<div class="card">${timer}<div class="alert ok"><b>Reserva para pago en efectivo</b><br>Acércate a la oficina de ${o.coop_name} con tu código de orden y cédula, y paga <b>${money(o.total_cents)}</b>.</div><div class="center"><div class="muted small">Código de orden</div><div class="mono" style="font-size:2rem;font-weight:800;letter-spacing:3px">${o.code}</div></div>
+    <div class="row mt"><button class="btn ghost" data-act="useTransfer">Prefiero pagar por transferencia</button><button class="btn err sm" data-act="cancelOrder">Cancelar orden</button></div></div>`;
+  const acc = o.bank_accounts, b = acc.find((x) => String(x.id) === String(CK.bank)) || acc[0];
+  return html`<div class="card">${timer}${rej}<h3>Pago por transferencia o depósito</h3>
+    ${acc.length ? html`<div class="field"><label>Cuenta de la cooperativa</label><select data-change="pickBank">${opts(acc, b && b.id, (x) => x.id, (x) => `${x.bank} · ${x.type} ${x.number}`)}</select></div>
+      <div class="card flat small"><b>${b.holder}</b> ${b.holder_id ? `· RUC/CI ${b.holder_id}` : ''}<br>${b.bank} — Cuenta ${b.type} <span class="mono">${b.number}</span> <button class="btn sm sec" data-act="copyNum" data-v="${b.number}">Copiar</button><br>Monto exacto: <b>${money(o.total_cents)}</b> <button class="btn sm sec" data-act="copyNum" data-v="${(o.total_cents / 100).toFixed(2)}">Copiar</button></div>` : html`<div class="alert warn">La cooperativa no tiene cuentas registradas. Reserva para pagar en efectivo.</div>`}
+    <form data-submit="sendProof" class="mt"><div class="frm"><div><label>Método</label><select name="method"><option>TRANSFERENCIA</option><option>DEPOSITO</option></select></div><div><label>Banco de origen / depósito</label><input name="bank" value="${b ? b.bank : ''}" required></div>
+      <div><label>N.º de comprobante</label><input name="reference" required></div><div><label>Fecha del pago</label><input type="date" name="paid_date" value="${todayStr()}" max="${todayStr()}" required></div>
+      <div><label>Monto pagado (USD)</label><input name="amount" type="number" step="0.01" min="0.01" value="${(o.total_cents / 100).toFixed(2)}" required></div><div><label>Foto o PDF del comprobante</label><input type="file" name="file" accept="image/png,image/jpeg,application/pdf" required></div></div>
+      <button class="btn block lg mt">Enviar comprobante</button><div class="small muted mt">Al enviarlo, el tiempo se detiene hasta que un oficinista lo valide.</div></form>
+    <hr style="border:0;border-top:1px solid var(--line);margin:18px 0"><div class="row spread"><button class="btn ghost" data-act="payCash">Reservar y pagar en efectivo en oficina</button><button class="btn err sm" data-act="cancelOrder">Cancelar orden</button></div></div>`;
+}
+function tickCheckout() { const el = $('#timer'); if (!el || !CK || !CK.end) return; const s = Math.max(0, Math.round((CK.end - Date.now()) / 1000)); const o = CK.o; el.textContent = o.method === 'EFECTIVO' ? (o.expires_at || '').slice(11, 16) : `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; if (s === 0 && o.method !== 'EFECTIVO') { CK.end = null; drawCheckout(); } }
+async function pollCheckout() { if (!CK || !$('#ckGrid')) return; try { const o = await api('/orders/' + CK.id); if (o.status !== CK.o.status) drawCheckout(); } catch (e) { /* */ } }
+App.A.pickBank = (el) => { CK.bank = el.value; drawCheckout(); };
+App.A.copyNum = (el) => copy(el.dataset.v);
+App.A.useTransfer = () => { CK.o.method = null; CK.o.expires_at = null; paint($('#ckGrid').children[1], payPanel({ ...CK.o, method: null, expires_at: null }, null)); };
+App.A.payCash = async (el) => guard(el, async () => { await api(`/orders/${CK.id}/pay`, { method: 'POST', body: { method: 'EFECTIVO' } }); await drawCheckout(); });
+App.A.cancelOrder = async () => { if (!(await confirmBox('Cancelar orden', '¿Seguro que deseas cancelar? Los asientos se liberarán.', 'Sí, cancelar'))) return; try { await api(`/orders/${CK.id}/cancel`, { method: 'POST' }); toast('Orden cancelada', 'ok'); go('/orders'); } catch (e) { toast(e.message, 'err'); } };
+App.A.sendProof = async (f) => { const fd = new FormData(f); const btn = $('button', f); await guard(btn, async () => { await api(`/orders/${CK.id}/proof`, { method: 'POST', form: fd }); toast('Comprobante enviado', 'ok'); await drawCheckout(); }); };
+App.A.orderPdf = (el) => openFile(`/orders/${el.dataset.id}/pdf`);
