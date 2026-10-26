@@ -1,11 +1,12 @@
 const router = require('express').Router();
 const multer = require('multer');
+const crypto = require('crypto');
 const fs = require('fs'), path = require('path');
 const { db, tx, UPLOADS } = require('../db');
 const S = require('../lib/settings');
 const core = require('../lib/core');
 const { requireAuth } = require('../lib/auth');
-const { notify, audit } = require('../lib/notify');
+const { notify, notifyRole, audit } = require('../lib/notify');
 const { nowLocal, addMinutes, diffMinutes, httpError, money } = require('../lib/util');
 
 const PRIV = path.join(UPLOADS, 'private');
@@ -80,6 +81,44 @@ router.post('/orders/:id/pay', requireAuth, (req, res) => {
   })();
   if (method === 'EFECTIVO') notify(req.user.id, 'Reserva para pago en efectivo', `Paga ${money(o.total_cents)} en la oficina de la cooperativa antes de las ${expAt.slice(11, 16)} con el código ${o.code}.`, '#/orders');
   res.json(orderDetail(db.prepare('SELECT * FROM orders WHERE id=?').get(o.id)));
+});
+
+router.post('/orders/:id/proof', requireAuth, upload.single('file'), (req, res) => {
+  try {
+    const o = loadOrder(req, req.params.id);
+    if (o.status !== 'RESERVADO') throw httpError(409, 'La orden no admite comprobante en su estado actual (¿expiró?)');
+    if (!req.file) throw httpError(400, 'Adjunta el comprobante (JPG, PNG o PDF)');
+    const ext = fileKind(req.file.path);
+    if (!ext) throw httpError(400, 'Formato de archivo no permitido. Usa JPG, PNG o PDF.');
+    const { bank, reference, paid_date, amount, method } = req.body || {};
+    if (!reference || !String(reference).trim()) throw httpError(400, 'Ingresa el número de comprobante / referencia');
+    const cents = Math.round(parseFloat(amount) * 100);
+    if (!(cents > 0)) throw httpError(400, 'Ingresa el monto pagado');
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(req.file.path)).digest('hex');
+    const dupe = db.prepare("SELECT 1 FROM payments WHERE order_id<>? AND status IN ('EN_REVISION','APROBADO') AND (proof_hash=? OR (bank=? AND reference=? AND amount_cents=?))").get(o.id, hash, bank || '', String(reference).trim(), cents);
+    if (dupe) throw httpError(409, 'Este comprobante ya fue utilizado en otra compra', 'PROOF_DUP');
+    const name = crypto.randomBytes(16).toString('hex') + ext; fs.renameSync(req.file.path, path.join(PRIV, name));
+    const now = nowLocal();
+    tx(() => {
+      db.prepare("UPDATE payments SET status='RECHAZADO', reject_reason='Reemplazado por nuevo comprobante' WHERE order_id=? AND status IN ('PENDIENTE','EN_REVISION')").run(o.id);
+      db.prepare("INSERT INTO payments(order_id,method,amount_cents,status,bank,reference,paid_date,proof_file,proof_hash,created_at) VALUES(?,?,?,'EN_REVISION',?,?,?,?,?,?)")
+        .run(o.id, ['TRANSFERENCIA', 'DEPOSITO'].includes(method) ? method : (o.method || 'TRANSFERENCIA'), cents, bank || null, String(reference).trim(), paid_date || null, name, hash, now);
+      db.prepare("UPDATE orders SET status='EN_REVISION', expires_at=NULL WHERE id=?").run(o.id);
+    })();
+    notifyRole(o.coop_id, ['OFFICE', 'COOP_ADMIN'], 'Comprobante por validar', `Orden ${o.code} por ${money(o.total_cents)}`, '#/office/payments');
+    notify(req.user.id, 'Comprobante recibido', `Recibimos tu comprobante de la orden ${o.code}. Un oficinista lo validará en breve.`, '#/orders');
+    audit(req, 'PROOF_UPLOAD', 'order', o.id);
+    res.json(orderDetail(db.prepare('SELECT * FROM orders WHERE id=?').get(o.id)));
+  } catch (e) { if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); throw e; }
+});
+
+/** Archivos privados (comprobantes): dueño de la orden o personal de la cooperativa */
+router.get('/files/:name', requireAuth, (req, res) => {
+  const name = path.basename(req.params.name);
+  const p = db.prepare('SELECT order_id FROM payments WHERE proof_file=?').get(name);
+  if (!p) throw httpError(404, 'Archivo no encontrado');
+  if (!canSeeOrder(req.user, db.prepare('SELECT * FROM orders WHERE id=?').get(p.order_id))) throw httpError(403, 'Sin acceso');
+  res.sendFile(path.join(PRIV, name));
 });
 
 module.exports = router; module.exports.orderDetail = orderDetail;
