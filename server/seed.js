@@ -6,9 +6,10 @@ const bcrypt = require('bcryptjs');
 const fs = require('fs'), path = require('path');
 const { db, UPLOADS } = require('./db');
 const S = require('./lib/settings');
+const core = require('./lib/core');
 const { genLayout, syncSeats, autoFares } = require('./routes/coop');
 const { generateRotation } = require('./lib/rotation');
-const { nowLocal, today, addDays, makeCedula } = require('./lib/util');
+const { nowLocal, today, addDays, addMinutes, makeCedula } = require('./lib/util');
 
 const PASS = 'Demo1234!';
 let seedN = 20260101;
@@ -155,6 +156,34 @@ async function run({ force = false } = {}) {
     }
 
     /* ---- Ventas de demostración ---- */
+    const officeUser = (key, n = 1) => db.prepare('SELECT * FROM users WHERE email=?').get(`oficina${n === 2 ? '2' : ''}.${key}@rutaec.test`);
+    const sessions = {};
+    for (const C of COOPS) { const u = officeUser(C.key); sessions[C.key] = ins('INSERT INTO cash_sessions(user_id,office_id,opened_at,opening_cents) VALUES(?,?,?,5000)', u.id, u.office_id, `${T} 06:00:00`); }
+
+    function mkPaid({ tripId, from, to, seatIds, key, buyer = null, channel = 'OFICINA', method = 'EFECTIVO', when = null }) {
+      const trip = core.getTrip(tripId), ou = officeUser(key);
+      const passengers = seatIds.map(sid => { const n = pick(NOMBRES), a = pick(APELLIDOS), r = rnd(); return { seatId: sid, cedula: newCedula(), nombres: n, apellidos: a, email: `${asc(n.split(' ')[0])}.${asc(a.split(' ')[0])}${cedN}@example.com`, phone: '09' + String(Math.floor(rnd() * 1e8)).padStart(8, '0'), category: r < 0.8 ? 'ADULTO' : r < 0.88 ? 'MENOR' : r < 0.96 ? 'TERCERA_EDAD' : 'DISCAPACIDAD' }; });
+      if (buyer && channel === 'WEB' && !db.prepare("SELECT 1 FROM tickets t JOIN passengers p ON p.id=t.passenger_id WHERE t.trip_id=? AND p.cedula=? AND t.status IN ('RESERVADO','VALIDO','ABORDADO','BAJO')").get(tripId, db.prepare('SELECT cedula FROM users WHERE id=?').get(buyer).cedula)) { const u = db.prepare('SELECT * FROM users WHERE id=?').get(buyer); passengers[0] = { ...passengers[0], cedula: u.cedula, nombres: u.nombres, apellidos: u.apellidos, email: u.email, phone: u.phone, category: 'ADULTO' }; }
+      const oid = core.createOrder({ tripId, from, to, passengers, buyerId: buyer, channel: channel === 'WEB' ? 'OFICINA' : channel, officeId: channel === 'WEB' ? null : ou.office_id, sellerId: channel === 'WEB' ? null : ou.id, expiresMinutes: 5, allowStarted: true });
+      const o = db.prepare('SELECT * FROM orders WHERE id=?').get(oid);
+      ins("INSERT INTO payments(order_id,method,amount_cents,status,bank,reference,reviewed_by,reviewed_at,created_at) VALUES(?,?,?,'APROBADO',?,?,?,?,?)", oid, method, o.total_cents, method === 'EFECTIVO' ? null : 'Banco Pichincha', method === 'EFECTIVO' ? null : String(100000 + Math.floor(rnd() * 899999)), ou.id, nowLocal(), nowLocal());
+      core.issueTickets(oid, ou.id, method);
+      if (channel === 'WEB') db.prepare("UPDATE orders SET channel='WEB', office_id=NULL, seller_id=NULL WHERE id=?").run(oid);
+      const past = trip.date < T;
+      // Fecha de la venta repartida en los días previos (reportes con historia) — nunca después de ahora
+      const baseDay = past ? trip.date : T, day = addDays(baseDay, -Math.floor(rnd() * 5));
+      const stamp = when || (day === T ? addMinutes(nowLocal(), -(10 + Math.floor(rnd() * 400))) : `${day} ${String(7 + Math.floor(rnd() * 12)).padStart(2, '0')}:${String(Math.floor(rnd() * 60)).padStart(2, '0')}:00`);
+      db.prepare('UPDATE orders SET created_at=?, paid_at=? WHERE id=?').run(stamp, stamp, oid);
+      db.prepare('UPDATE tickets SET created_at=? WHERE order_id=?').run(stamp, oid);
+      if (method === 'EFECTIVO' && stamp.slice(0, 10) === T && channel !== 'WEB') db.prepare('UPDATE orders SET cash_session_id=? WHERE id=?').run(sessions[key], oid);
+      if (past) {
+        for (const t of db.prepare('SELECT id FROM tickets WHERE order_id=?').all(oid)) {
+          const r = rnd(), st = r < 0.9 ? 'BAJO' : 'VALIDO';
+          db.prepare('UPDATE tickets SET status=?, boarded_at=?, alighted_at=? WHERE id=?').run(st, st === 'VALIDO' ? null : trip.depart_at, st === 'BAJO' ? addMinutes(trip.depart_at, trip.stops[trip.stops.length - 1].minutes) : null, t.id);
+        }
+      }
+      return oid;
+    }
   })();
 
   if (proofJob) fs.writeFileSync(path.join(UPLOADS, 'private', proofJob.pf), await proofPdf(proofJob.ref, proofJob.amount));
