@@ -102,3 +102,27 @@ App.A.seat = (el) => {
   if (Sel.seats.has(id)) Sel.seats.delete(id); else { if (Sel.seats.size >= (App.cfg.max_seats || 10)) return toast(`Máximo ${App.cfg.max_seats} asientos por compra`, 'err'); Sel.seats.set(id, s); }
   el.classList.toggle('sel'); drawSummary();
 };
+App.A.toStep2 = () => { if (!App.user) { toast('Inicia sesión o crea tu cuenta para continuar'); return go('/login?next=' + encodeURIComponent(location.hash.slice(1))); } if (App.user.role !== 'CLIENT') return toast('Las compras en línea son para clientes. Usa el módulo de oficina.', 'err'); Sel.step = 2; drawTrip(); };
+function drawStep2() {
+  const u = App.user, list = [...Sel.seats.values()];
+  paint($('#stepBody'), html`<form data-submit="createOrder" class="grid" style="grid-template-columns:minmax(0,1fr) 300px;align-items:start" id="gridPax"><div>
+    ${list.map((s, i) => html`<div class="card"><div class="row spread"><h3>Pasajero ${i + 1} · Asiento ${s.label}</h3><span class="chip">${s.type}</span></div>
+      <div class="frm"><div><label>Cédula</label><input name="cedula_${s.id}" inputmode="numeric" maxlength="10" required pattern="\\d{10}" value="${i === 0 && u.cedula ? u.cedula : ''}"></div>
+      <div><label>Nombres</label><input name="nombres_${s.id}" required value="${i === 0 ? u.nombres : ''}"></div><div><label>Apellidos</label><input name="apellidos_${s.id}" required value="${i === 0 ? u.apellidos : ''}"></div>
+      <div><label>Correo (envío del boleto)</label><input type="email" name="email_${s.id}" required value="${u.email}"></div><div><label>Celular</label><input name="phone_${s.id}" value="${i === 0 && u.phone ? u.phone : ''}"></div>
+      <div><label>Categoría</label><select name="category_${s.id}">${Object.entries(CAT).map(([k, v]) => html`<option value="${k}">${v}</option>`)}</select></div></div>
+      <div class="small muted">Si eliges una categoría con descuento, deberás presentar tu cédula al abordar.</div></div>`)}</div>
+    <div class="card"><h3>Resumen</h3><table>${list.map((s) => html`<tr><td>Asiento ${s.label}</td><td class="right">${money(s.price_cents)}</td></tr>`)}</table>
+    <div class="alert warn mt">Tendrás <b>${App.cfg.reserve_minutes} minutos</b> para completar el pago o subir tu comprobante. Luego los asientos se liberan.</div>
+    <label><input type="checkbox" required> Acepto los <a href="#/terms" target="_blank">términos</a> y la <a href="#/privacy" target="_blank">política de privacidad</a></label>
+    <button class="btn block lg mt">Reservar y pagar</button><button type="button" class="btn ghost block mt" data-act="toStep1">◀ Cambiar asientos</button></div></form>`);
+  if (window.innerWidth < 900) $('#gridPax').style.gridTemplateColumns = '1fr';
+}
+App.A.toStep1 = () => { Sel.step = 1; drawTrip(); };
+App.A.createOrder = async (f) => {
+  const o = formObj(f), passengers = [...Sel.seats.keys()].map((id) => ({ seatId: id, cedula: o['cedula_' + id], nombres: o['nombres_' + id], apellidos: o['apellidos_' + id], email: o['email_' + id], phone: o['phone_' + id], category: o['category_' + id] }));
+  const btn = $('button:not([type])', f);
+  await guard(btn, async () => { const r = await api('/orders', { method: 'POST', body: { tripId: Sel.tripId, from: Sel.from, to: Sel.to, passengers } }); Sel = null; go('/checkout/' + r.id); });
+};
+
+/* ---------- Pago ---------- */
