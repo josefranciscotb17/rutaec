@@ -1,0 +1,48 @@
+const router = require('express').Router();
+const multer = require('multer');
+const fs = require('fs'), path = require('path');
+const { db, UPLOADS } = require('../db');
+const core = require('../lib/core');
+const { requireAuth } = require('../lib/auth');
+const { audit } = require('../lib/notify');
+const { nowLocal, diffMinutes, httpError } = require('../lib/util');
+
+const PRIV = path.join(UPLOADS, 'private');
+const upload = multer({ dest: PRIV, limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
+const base = (req) => process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+const isStaff = (u) => ['SUPERADMIN', 'AUDITOR', 'COOP_ADMIN', 'OFFICE'].includes(u.role);
+
+function canSeeOrder(u, o) { return o.buyer_id === u.id || ['SUPERADMIN', 'AUDITOR'].includes(u.role) || (['COOP_ADMIN', 'OFFICE'].includes(u.role) && u.coop_id === o.coop_id); }
+function loadOrder(req, id) {
+  core.expireOrders();
+  const o = db.prepare('SELECT * FROM orders WHERE id=?').get(+id);
+  if (!o) throw httpError(404, 'Orden no encontrada');
+  if (!canSeeOrder(req.user, o)) throw httpError(403, 'No tienes acceso a esta orden');
+  return o;
+}
+function orderDetail(o) {
+  const full = core.ordersWithTickets('o.id=?', [o.id])[0];
+  full.bank_accounts = db.prepare('SELECT id,bank,type,number,holder,holder_id FROM bank_accounts WHERE coop_id=? AND active=1').all(o.coop_id);
+  full.payments = db.prepare('SELECT id,method,status,reference,bank,paid_date,reject_reason,amount_cents,proof_file,created_at FROM payments WHERE order_id=? ORDER BY id').all(o.id);
+  full.seconds_left = o.status === 'RESERVADO' && o.expires_at ? Math.max(0, -diffMinutes(nowLocal(), o.expires_at) * 60) : null;
+  return full;
+}
+function fileKind(file) {
+  const fd = fs.openSync(file, 'r'), b = Buffer.alloc(8); fs.readSync(fd, b, 0, 8, 0); fs.closeSync(fd);
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return '.png';
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return '.jpg';
+  if (b.slice(0, 4).toString() === '%PDF') return '.pdf';
+  return null;
+}
+
+/* ---------------- Cliente: crear / ver / pagar ---------------- */
+router.post('/orders', requireAuth, (req, res) => {
+  const b = req.body || {};
+  const id = core.createOrder({ tripId: +b.tripId, from: b.from, to: b.to, passengers: b.passengers, buyerId: req.user.id, channel: 'WEB' });
+  audit(req, 'ORDER_CREATE', 'order', id);
+  res.status(201).json(orderDetail(db.prepare('SELECT * FROM orders WHERE id=?').get(id)));
+});
+router.get('/orders/mine', requireAuth, (req, res) => { core.expireOrders(); res.json(core.ordersWithTickets('o.buyer_id=?', [req.user.id])); });
+router.get('/orders/:id', requireAuth, (req, res) => res.json(orderDetail(loadOrder(req, req.params.id))));
+
+module.exports = router; module.exports.orderDetail = orderDetail;
