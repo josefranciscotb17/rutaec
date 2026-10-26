@@ -173,4 +173,16 @@ router.get('/orders/:id/print', ...office, async (req, res) => {
   await printTickets(req, res, db.prepare("SELECT id FROM tickets WHERE order_id=? AND status IN ('VALIDO','ABORDADO')").all(o.id).map(r => r.id));
 });
 
+/* ---------------- Notificaciones y calificaciones ---------------- */
+router.get('/notifications', requireAuth, (req, res) => res.json(db.prepare('SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 100').all(req.user.id)));
+router.post('/notifications/read', requireAuth, (req, res) => { db.prepare('UPDATE notifications SET read=1 WHERE user_id=?').run(req.user.id); res.json({ ok: true }); });
+router.post('/trips/:id/rating', requireAuth, (req, res) => {
+  const { stars, comment } = req.body || {};
+  const ok = db.prepare("SELECT 1 FROM tickets t JOIN orders o ON o.id=t.order_id WHERE o.buyer_id=? AND t.trip_id=? AND t.status IN ('ABORDADO','BAJO')").get(req.user.id, +req.params.id);
+  if (!ok) throw httpError(403, 'Solo puedes calificar viajes en los que abordaste');
+  if (!(stars >= 1 && stars <= 5)) throw httpError(400, 'Calificación inválida');
+  db.prepare('INSERT OR REPLACE INTO ratings(trip_id,user_id,stars,comment,created_at) VALUES(?,?,?,?,?)').run(+req.params.id, req.user.id, stars, comment || null, nowLocal());
+  res.json({ ok: true });
+});
+
 module.exports = router; module.exports.orderDetail = orderDetail; module.exports.publicTicket = publicTicket;
