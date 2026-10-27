@@ -136,3 +136,36 @@ App.A.boardManual = async (el) => { DR.last = el.dataset.c; await handleCode(el.
 App.A.alight = async (el) => { try { await api(`/driver/trips/${DR.trip.id}/alight`, { method: 'POST', body: { ticketId: +el.dataset.id } }); await loadMan(); drawConsole(); } catch (e) { toast(e.message, 'err'); } };
 
 /* ---- Venta en ruta ---- */
+async function tabSell() {
+  const x = DR.trip;
+  if (!['EN_RUTA', 'ABORDANDO'].includes(x.status)) return paint($('#drBody'), html`<div class="card">${empty('Inicia el viaje para vender boletos en ruta.', '🚌')}</div>`);
+  const stops = x.stops;
+  DR.sale = DR.sale || { from: 0, to: stops.length - 1, seats: new Map(), all: [] };
+  const S = DR.sale;
+  try { S.all = (await api(`/driver/trips/${x.id}/free-seats?from=${S.from}&to=${S.to}`)).seats; } catch (e) { return paint($('#drBody'), html`<div class="alert err">${e.message}</div>`); }
+  paint($('#drBody'), html`<div class="card"><div class="alert">El precio puede ajustarse entre ${App.cfg.driver_price_min_pct}% y ${App.cfg.driver_price_max_pct}% de la tarifa. El cobro es en efectivo y el pasajero queda abordado.</div>
+    <div class="frm"><div><label>Sube en</label><select data-change="drFrom">${stops.slice(0, -1).map((s) => html`<option value="${s.ord}" ${s.ord === S.from ? raw('selected') : ''}>${s.city}</option>`)}</select></div><div><label>Baja en</label><select data-change="drTo">${stops.filter((s) => s.ord > S.from).map((s) => html`<option value="${s.ord}" ${s.ord === S.to ? raw('selected') : ''}>${s.city}</option>`)}</select></div></div>
+    <div class="center mt" id="drSeats">${seatMapHtml(S.all, new Set(S.seats.keys()))}</div><div id="drForm"></div></div>`);
+  drForm();
+}
+function drSeat(el) { const S = DR.sale, id = +el.dataset.id, s = S.all.find((x) => x.id === id); if (S.seats.has(id)) S.seats.delete(id); else S.seats.set(id, s); el.classList.toggle('sel'); drForm(); }
+App.A.drFrom = (el) => { DR.sale.from = +el.value; if (DR.sale.to <= DR.sale.from) DR.sale.to = DR.trip.stops.length - 1; DR.sale.seats.clear(); tabSell(); };
+App.A.drTo = (el) => { DR.sale.to = +el.value; DR.sale.seats.clear(); tabSell(); };
+function drForm() {
+  const S = DR.sale, list = [...S.seats.values()], box = $('#drForm'); if (!box) return;
+  if (!list.length) return paint(box, html`<p class="muted center">Toca un asiento libre.</p>`);
+  const c = App.cfg;
+  paint(box, html`<form data-submit="drSell">${list.map((s) => { const base = s.price_cents - c.terminal_fee_cents; return html`<div class="card flat"><b>Asiento ${s.label}</b><div class="frm mt"><div><label>Cédula</label><input name="cedula_${s.id}" maxlength="10" inputmode="numeric" pattern="\\d{10}" required></div><div><label>Nombres</label><input name="nombres_${s.id}" required></div><div><label>Apellidos</label><input name="apellidos_${s.id}" required></div>
+    <div><label>Categoría</label><select name="category_${s.id}">${Object.entries(CAT).map(([k, v]) => html`<option value="${k}">${v}</option>`)}</select></div><div><label>Precio (USD)</label><input name="price_${s.id}" type="number" step="0.05" min="${(base * c.driver_price_min_pct / 10000).toFixed(2)}" max="${(base * c.driver_price_max_pct / 10000).toFixed(2)}" value="${(base / 100).toFixed(2)}" required></div></div></div>`; })}
+    <button class="btn ok lg block mt">Cobrar en efectivo y emitir</button></form>`);
+}
+App.A.drSell = async (f) => {
+  const o = formObj(f), S = DR.sale, passengers = [...S.seats.keys()].map((id) => ({ seatId: id, cedula: o['cedula_' + id], nombres: o['nombres_' + id], apellidos: o['apellidos_' + id], category: o['category_' + id], price_cents: Math.round(parseFloat(o['price_' + id]) * 100) }));
+  await guard($('button', f), async () => { const r = await api('/driver/sale', { method: 'POST', body: { tripId: DR.trip.id, from: S.from, to: S.to, passengers } }); toast(`Venta registrada: ${money(r.total_cents)}`, 'ok'); DR.sale = null; await loadMan(); drawConsole(); DR.tab = 'sell'; drawConsole(); });
+};
+
+/* ---- Incidencias ---- */
+function tabInc() {
+  paint($('#drBody'), html`<div class="card"><form data-submit="sendInc"><div class="frm"><div><label>Tipo</label><select name="kind">${['RETRASO', 'AVERIA', 'ACCIDENTE', 'DESVIO', 'PASAJERO', 'OTRO'].map((k) => html`<option>${k}</option>`)}</select></div><div class="full"><label>Detalle</label><textarea name="detail" rows="3"></textarea></div></div><button class="btn mt">Reportar a la cooperativa</button></form></div>`);
+}
+App.A.sendInc = (f) => guard($('button', f), async () => { await api(`/driver/trips/${DR.trip.id}/incident`, { method: 'POST', body: formObj(f) }); toast('Incidencia enviada a la administración', 'ok'); f.reset(); });
