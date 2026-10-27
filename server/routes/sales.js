@@ -6,7 +6,7 @@ const { db, tx, UPLOADS } = require('../db');
 const S = require('../lib/settings');
 const core = require('../lib/core');
 const docs = require('../lib/docs');
-const { requireAuth, requireRole } = require('../lib/auth');
+const { requireAuth, requireRole, coopId } = require('../lib/auth');
 const { notify, notifyRole, audit } = require('../lib/notify');
 const { nowLocal, addMinutes, diffMinutes, httpError, money } = require('../lib/util');
 
@@ -183,6 +183,44 @@ router.post('/trips/:id/rating', requireAuth, (req, res) => {
   if (!(stars >= 1 && stars <= 5)) throw httpError(400, 'Calificación inválida');
   db.prepare('INSERT OR REPLACE INTO ratings(trip_id,user_id,stars,comment,created_at) VALUES(?,?,?,?,?)').run(+req.params.id, req.user.id, stars, comment || null, nowLocal());
   res.json({ ok: true });
+});
+
+/* ---------------- Oficinista ---------------- */
+function openSession(user) { return db.prepare('SELECT * FROM cash_sessions WHERE user_id=? AND closed_at IS NULL').get(user.id); }
+
+router.get('/office/trips', ...office, (req, res) => {
+  const c = coopId(req), date = req.query.date || nowLocal().slice(0, 10);
+  core.expireOrders();
+  const rows = db.prepare(`SELECT t.id FROM trips t JOIN frequencies f ON f.id=t.frequency_id WHERE f.coop_id=? AND t.date=? AND t.status<>'CANCELADO' ORDER BY t.depart_at`).all(c, date);
+  res.json(rows.map(r => { const t = core.getTrip(r.id); const sold = db.prepare(`SELECT COUNT(*) n FROM tickets WHERE trip_id=? AND status IN ${core.ACTIVE}`).get(t.id).n;
+    return { id: t.id, depart_at: t.depart_at, status: t.status, bus_number: t.bus_number, plate: t.plate, capacity: t.capacity, sold, stops: t.stops, kind: t.kind, platform: t.platform, origin: t.stops[0].city, dest: t.stops[t.stops.length - 1].city }; }));
+});
+router.get('/office/trips/:id/seats', ...office, (req, res) => {
+  const c = coopId(req), t = core.getTrip(+req.params.id); if (!t || t.coop_id !== c) throw httpError(404, 'Viaje no encontrado');
+  const m = core.seatMap(t.id, +req.query.from, +req.query.to); res.json({ seats: m.seats, floors: t.floors });
+});
+
+router.post('/office/sale', ...office, (req, res) => {
+  const b = req.body || {}, c = coopId(req);
+  const method = ['EFECTIVO', 'TRANSFERENCIA', 'DEPOSITO', 'TARJETA'].includes(b.method) ? b.method : 'EFECTIVO';
+  const trip = core.getTrip(+b.tripId); if (!trip || trip.coop_id !== c) throw httpError(404, 'Viaje no encontrado en tu cooperativa');
+  const sess = openSession(req.user);
+  if (method === 'EFECTIVO' && !sess) throw httpError(409, 'Abre tu caja antes de cobrar en efectivo', 'CASH_CLOSED');
+  if (['TRANSFERENCIA', 'DEPOSITO', 'TARJETA'].includes(method) && !String(b.reference || '').trim()) throw httpError(400, 'Ingresa el número de referencia / autorización');
+  const out = tx(() => {
+    const id = core.createOrder({ tripId: trip.id, from: b.from, to: b.to, passengers: b.passengers, buyerId: b.buyerId || null, channel: 'OFICINA', officeId: req.user.office_id, sellerId: req.user.id, expiresMinutes: 5 });
+    const o = db.prepare('SELECT * FROM orders WHERE id=?').get(id);
+    if (method === 'EFECTIVO' && b.received_cents != null && +b.received_cents < o.total_cents) throw httpError(400, 'El monto recibido es menor al total');
+    db.prepare("INSERT INTO payments(order_id,method,amount_cents,status,bank,reference,received_cents,reviewed_by,reviewed_at,created_at) VALUES(?,?,?,'APROBADO',?,?,?,?,?,?)")
+      .run(id, method, o.total_cents, b.bank || null, b.reference || null, b.received_cents != null ? +b.received_cents : null, req.user.id, nowLocal(), nowLocal());
+    db.prepare('UPDATE orders SET cash_session_id=? WHERE id=?').run(sess ? sess.id : null, id);
+    core.issueTickets(id, req.user.id, method);
+    return id;
+  })();
+  audit(req, 'OFFICE_SALE', 'order', out);
+  const d = orderDetail(db.prepare('SELECT * FROM orders WHERE id=?').get(out));
+  d.change_cents = b.received_cents != null ? Math.max(0, +b.received_cents - d.total_cents) : 0;
+  res.status(201).json(d);
 });
 
 module.exports = router; module.exports.orderDetail = orderDetail; module.exports.publicTicket = publicTicket;
