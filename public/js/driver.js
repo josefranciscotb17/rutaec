@@ -56,3 +56,71 @@ App.A.tripFinish = async () => {
 function drawTab() { ({ scan: tabScan, pax: tabPax, sell: tabSell, inc: tabInc })[DR.tab](); }
 
 /* ---- Escáner ---- */
+function tabScan() {
+  paint($('#drBody'), html`<div class="grid" style="grid-template-columns:minmax(0,520px) minmax(0,1fr);align-items:start" id="scGrid"><div><div class="scanwrap" id="cam"><video playsinline muted></video><div class="frame"></div></div><div class="row mt"><button class="btn" data-act="camToggle" id="camBtn">Activar cámara</button></div>
+    <form data-submit="manualScan" class="row mt"><input name="code" class="grow mono" placeholder="Código manual (10 caracteres) o pega el enlace" autocomplete="off"><button class="btn sec">Validar</button></form></div><div id="scRes"><div class="card muted center">Apunta la cámara al código QR del boleto.</div></div></div>`);
+  if (window.innerWidth < 900) $('#scGrid').style.gridTemplateColumns = '1fr';
+  startCam();
+}
+let camStream = null;
+async function startCam() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('#camBtn').disabled = true; return toast('Este navegador no permite cámara (se requiere HTTPS o localhost). Usa el código manual.', 'err'); }
+  try { camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } }); } catch (e) { $('#camBtn').textContent = 'Permitir cámara'; return toast('No se pudo abrir la cámara: ' + e.message, 'err'); }
+  const video = $('#cam video'); if (!video) { stopCam(); return; }
+  video.srcObject = camStream; await video.play().catch(() => {}); $('#camBtn').textContent = 'Detener cámara';
+  const cv = document.createElement('canvas'), ctx = cv.getContext('2d', { willReadFrequently: true });
+  const iv = setInterval(() => {
+    if (!$('#cam') || !camStream) { clearInterval(iv); stopCam(); return; }
+    if (video.readyState < 2) return;
+    const w = Math.min(640, video.videoWidth), h = Math.round(w * video.videoHeight / video.videoWidth); if (!w) return;
+    cv.width = w; cv.height = h; ctx.drawImage(video, 0, 0, w, h);
+    const r = window.jsQR && jsQR(ctx.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: 'dontInvert' });
+    if (r && r.data && (r.data !== DR.last || Date.now() - DR.lastAt > 3500)) { DR.last = r.data; DR.lastAt = Date.now(); handleCode(r.data); }
+  }, 160);
+}
+function stopCam() { if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; } }
+App.A.camToggle = () => { if (camStream) { stopCam(); $('#camBtn').textContent = 'Activar cámara'; } else startCam(); };
+App.A.manualScan = (f) => { const v = formObj(f).code; f.reset(); if (v) handleCode(v); };
+const norm = (raw) => { let c = String(raw || '').trim(); const i = c.lastIndexOf('/v/'); if (i >= 0) c = c.slice(i + 3); return c.replace(/[^A-Za-z0-9]/g, '').toUpperCase(); };
+function beep(ok) { try { const a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(), g = a.createGain(); o.connect(g); g.connect(a.destination); o.frequency.value = ok ? 880 : 220; g.gain.value = 0.15; o.start(); o.stop(a.currentTime + (ok ? 0.12 : 0.35)); } catch (e) { /* */ } if (navigator.vibrate) navigator.vibrate(ok ? 80 : [200, 80, 200]); }
+async function handleCode(raw) {
+  const code = norm(raw); if (!code) return;
+  let r;
+  try { r = await api('/driver/scan', { method: 'POST', body: { tripId: DR.trip.id, code, device: navigator.userAgent.slice(0, 60) } }); if (DR.offline) { DR.offline = false; } }
+  catch (e) { if (e.offline) r = localScan(code); else r = { result: 'ERROR', message: e.message }; }
+  showScan(r);
+}
+function localScan(code) {
+  DR.offline = true;
+  const t = DR.man && DR.man.tickets.find((x) => x.code === code || x.short_code === code);
+  if (!t) return { result: 'INVALIDO', message: 'No pertenece a este viaje o código no reconocido (sin conexión)' };
+  const info = { name: t.name, seat: t.seat, seat_type: t.seat_type, category: t.category, cedula: t.cedula, from: t.from, to: t.to, number: t.number };
+  if (t.status === 'ANULADO') return { result: 'ANULADO', message: 'Boleto anulado', ticket: info };
+  if (['ABORDADO', 'BAJO'].includes(t.status)) return { result: 'YA_USADO', message: 'Ya fue escaneado', ticket: info };
+  t.status = 'ABORDADO'; saveMan();
+  const q = getQ(); q.push({ local_id: Date.now() + '-' + Math.random().toString(36).slice(2, 6), tripId: DR.trip.id, code, scannedAt: new Date().toLocaleString('sv-SE', { timeZone: 'America/Guayaquil' }) }); setQ(q);
+  return { result: 'VALIDO', message: 'Boleto válido (pendiente de sincronizar)', ticket: info, review_doc: t.category !== 'ADULTO' };
+}
+function showScan(r) {
+  const ok = r.result === 'VALIDO'; beep(ok);
+  if (ok && DR.man) { const t = DR.man.tickets.find((x) => x.code === norm(DR.last) || x.short_code === norm(DR.last)); if (t) { t.status = 'ABORDADO'; saveMan(); } }
+  if (ok && r.counts) { const el = $('#cnt'); if (el) el.textContent = `${r.counts.boarded}/${r.counts.total}`; } else if (ok) { const c = counts(), el = $('#cnt'); if (el) el.textContent = `${c.boarded}/${c.total}`; }
+  const tk = r.ticket;
+  const box = $('#scRes'); if (!box) return;
+  paint(box, html`<div class="res ${r.result}"><div style="font-size:2.4rem">${ok ? '✔' : r.result === 'YA_USADO' || r.result === 'OTRO_VIAJE' ? '⚠' : '✖'}</div><div style="font-size:1.4rem">${r.result.replace('_', ' ')}</div><div style="font-weight:400">${r.message}</div></div>
+    ${tk ? html`<div class="card mt"><div style="font-size:1.4rem;font-weight:800">${tk.name}</div><div class="grid g2 mt"><div><span class="muted small">Asiento</span><br><b style="font-size:1.4rem">${tk.seat}</b> <span class="small">${tk.seat_type || ''}</span></div><div><span class="muted small">Cédula</span><br><b>${tk.cedula}</b></div><div><span class="muted small">Tramo</span><br>${tk.from} → ${tk.to}</div><div><span class="muted small">Categoría</span><br>${CAT[tk.category] || tk.category}</div></div>
+      ${r.review_doc ? html`<div class="alert warn mt"><b>Verifica el documento:</b> ${CAT[tk.category]} (el pasajero debe presentar cédula/carné).</div>` : ''}</div>` : ''}`);
+}
+async function syncQueue(quiet) {
+  const q = getQ(); if (!q.length) return;
+  try {
+    const r = await api('/driver/scans/batch', { method: 'POST', body: { scans: q.map((s) => ({ ...s, device: 'offline-sync' })) } });
+    const bad = r.results.filter((x) => x.result !== 'VALIDO' && x.result !== 'YA_USADO');
+    setQ([]); await loadMan();
+    if (!quiet) toast(`Sincronizados ${r.results.length} escaneos${bad.length ? ' · ' + bad.length + ' con observaciones' : ''}`, bad.length ? 'err' : 'ok');
+    if ($('#drBody')) drawConsole();
+  } catch (e) { if (!quiet) toast('No se pudo sincronizar: ' + e.message, 'err'); }
+}
+App.A.syncNow = () => syncQueue(false);
+
+/* ---- Pasajeros ---- */
