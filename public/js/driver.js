@@ -124,3 +124,15 @@ async function syncQueue(quiet) {
 App.A.syncNow = () => syncQueue(false);
 
 /* ---- Pasajeros ---- */
+function tabPax() {
+  const list = (DR.man ? DR.man.tickets : []).slice().sort((a, b) => String(a.seat).localeCompare(String(b.seat), undefined, { numeric: true }));
+  paint($('#drBody'), html`<div class="card"><div class="row spread mb"><input id="paxQ" placeholder="Buscar nombre, cédula o asiento" class="grow" data-input="paxFilter"><a class="btn sec sm" href="javascript:void(0)" data-act="paxPrint">🖨️ Manifiesto</a></div>
+    ${list.length ? tbl(['Asiento', 'Pasajero', 'Cédula', 'Tramo', 'Cat.', 'Estado', ''], list.map((t) => html`<tr data-row="${(t.seat + ' ' + t.name + ' ' + t.cedula).toLowerCase()}"><td><b>${t.seat}</b></td><td>${t.name}</td><td>${t.cedula}</td><td class="small">${t.from}→${t.to}</td><td>${t.category === 'ADULTO' ? '' : html`<span class="chip warn">${CAT[t.category]}</span>`}</td><td>${chip(t.status)}</td>
+      <td class="nowrap">${t.status === 'VALIDO' ? html`<button class="btn sm sec" data-act="boardManual" data-c="${t.short_code}">Abordar</button>` : ''}${t.status === 'ABORDADO' ? html`<button class="btn sm ghost" data-act="alight" data-id="${t.id}">Bajó</button>` : ''}</td></tr>`)) : empty('Aún no hay boletos emitidos para este viaje.', '👥')}</div>`);
+}
+App.A.paxFilter = (el) => { const q = el.value.toLowerCase(); $$('[data-row]').forEach((r) => r.classList.toggle('hide', !r.dataset.row.includes(q))); };
+App.A.paxPrint = () => openPrint(`/manifest/${DR.trip.id}`);
+App.A.boardManual = async (el) => { DR.last = el.dataset.c; await handleCode(el.dataset.c); await loadMan(); drawConsole(); };
+App.A.alight = async (el) => { try { await api(`/driver/trips/${DR.trip.id}/alight`, { method: 'POST', body: { ticketId: +el.dataset.id } }); await loadMan(); drawConsole(); } catch (e) { toast(e.message, 'err'); } };
+
+/* ---- Venta en ruta ---- */
