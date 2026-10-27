@@ -6,7 +6,7 @@ const { db, tx, UPLOADS } = require('../db');
 const S = require('../lib/settings');
 const core = require('../lib/core');
 const docs = require('../lib/docs');
-const { requireAuth, requireRole } = require('../lib/auth');
+const { requireAuth, requireRole, coopId } = require('../lib/auth');
 const { notify, notifyRole, audit } = require('../lib/notify');
 const { nowLocal, addMinutes, diffMinutes, httpError, money } = require('../lib/util');
 
@@ -185,4 +185,190 @@ router.post('/trips/:id/rating', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+/* ---------------- Oficinista ---------------- */
+function openSession(user) { return db.prepare('SELECT * FROM cash_sessions WHERE user_id=? AND closed_at IS NULL').get(user.id); }
+
+router.get('/office/trips', ...office, (req, res) => {
+  const c = coopId(req), date = req.query.date || nowLocal().slice(0, 10);
+  core.expireOrders();
+  const rows = db.prepare(`SELECT t.id FROM trips t JOIN frequencies f ON f.id=t.frequency_id WHERE f.coop_id=? AND t.date=? AND t.status<>'CANCELADO' ORDER BY t.depart_at`).all(c, date);
+  res.json(rows.map(r => { const t = core.getTrip(r.id); const sold = db.prepare(`SELECT COUNT(*) n FROM tickets WHERE trip_id=? AND status IN ${core.ACTIVE}`).get(t.id).n;
+    return { id: t.id, depart_at: t.depart_at, status: t.status, bus_number: t.bus_number, plate: t.plate, capacity: t.capacity, sold, stops: t.stops, kind: t.kind, platform: t.platform, origin: t.stops[0].city, dest: t.stops[t.stops.length - 1].city }; }));
+});
+router.get('/office/trips/:id/seats', ...office, (req, res) => {
+  const c = coopId(req), t = core.getTrip(+req.params.id); if (!t || t.coop_id !== c) throw httpError(404, 'Viaje no encontrado');
+  const m = core.seatMap(t.id, +req.query.from, +req.query.to); res.json({ seats: m.seats, floors: t.floors });
+});
+
+router.post('/office/sale', ...office, (req, res) => {
+  const b = req.body || {}, c = coopId(req);
+  const method = ['EFECTIVO', 'TRANSFERENCIA', 'DEPOSITO', 'TARJETA'].includes(b.method) ? b.method : 'EFECTIVO';
+  const trip = core.getTrip(+b.tripId); if (!trip || trip.coop_id !== c) throw httpError(404, 'Viaje no encontrado en tu cooperativa');
+  const sess = openSession(req.user);
+  if (method === 'EFECTIVO' && !sess) throw httpError(409, 'Abre tu caja antes de cobrar en efectivo', 'CASH_CLOSED');
+  if (['TRANSFERENCIA', 'DEPOSITO', 'TARJETA'].includes(method) && !String(b.reference || '').trim()) throw httpError(400, 'Ingresa el número de referencia / autorización');
+  const out = tx(() => {
+    const id = core.createOrder({ tripId: trip.id, from: b.from, to: b.to, passengers: b.passengers, buyerId: b.buyerId || null, channel: 'OFICINA', officeId: req.user.office_id, sellerId: req.user.id, expiresMinutes: 5 });
+    const o = db.prepare('SELECT * FROM orders WHERE id=?').get(id);
+    if (method === 'EFECTIVO' && b.received_cents != null && +b.received_cents < o.total_cents) throw httpError(400, 'El monto recibido es menor al total');
+    db.prepare("INSERT INTO payments(order_id,method,amount_cents,status,bank,reference,received_cents,reviewed_by,reviewed_at,created_at) VALUES(?,?,?,'APROBADO',?,?,?,?,?,?)")
+      .run(id, method, o.total_cents, b.bank || null, b.reference || null, b.received_cents != null ? +b.received_cents : null, req.user.id, nowLocal(), nowLocal());
+    db.prepare('UPDATE orders SET cash_session_id=? WHERE id=?').run(sess ? sess.id : null, id);
+    core.issueTickets(id, req.user.id, method);
+    return id;
+  })();
+  audit(req, 'OFFICE_SALE', 'order', out);
+  const d = orderDetail(db.prepare('SELECT * FROM orders WHERE id=?').get(out));
+  d.change_cents = b.received_cents != null ? Math.max(0, +b.received_cents - d.total_cents) : 0;
+  res.status(201).json(d);
+});
+
+router.get('/office/payments', ...office, (req, res) => {
+  const c = coopId(req), st = req.query.status || 'EN_REVISION';
+  const rows = db.prepare(`SELECT p.*, o.code AS order_code, o.total_cents, o.buyer_id, o.trip_id, o.created_at AS order_created, u.nombres, u.apellidos, u.email FROM payments p JOIN orders o ON o.id=p.order_id LEFT JOIN users u ON u.id=o.buyer_id
+    WHERE o.coop_id=? AND p.status=? AND p.method IN ('TRANSFERENCIA','DEPOSITO') ORDER BY p.created_at`).all(c, st);
+  for (const r of rows) { r.trip = core.summarizeTrip(r.trip_id); r.tickets = db.prepare('SELECT s.label seat, p.nombres, p.apellidos, p.cedula FROM tickets t JOIN bus_seats s ON s.id=t.seat_id JOIN passengers p ON p.id=t.passenger_id WHERE t.order_id=?').all(r.order_id); r.waiting_min = diffMinutes(nowLocal(), r.created_at); }
+  res.json(rows);
+});
+router.post('/office/payments/:id/approve', ...office, (req, res) => {
+  const c = coopId(req), p = db.prepare('SELECT p.*, o.coop_id, o.buyer_id, o.code, o.total_cents FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.id=?').get(+req.params.id);
+  if (!p || p.coop_id !== c) throw httpError(404, 'Pago no encontrado');
+  if (p.status !== 'EN_REVISION') throw httpError(409, 'El pago no está en revisión');
+  if (p.amount_cents < p.total_cents) throw httpError(400, `El monto pagado (${money(p.amount_cents)}) es menor al total (${money(p.total_cents)}). Rechaza indicando la diferencia.`);
+  tx(() => {
+    db.prepare("UPDATE payments SET status='APROBADO', reviewed_by=?, reviewed_at=? WHERE id=?").run(req.user.id, nowLocal(), p.id);
+    db.prepare('UPDATE orders SET seller_id=COALESCE(seller_id,?), office_id=COALESCE(office_id,?) WHERE id=?').run(req.user.id, req.user.office_id, p.order_id);
+    core.issueTickets(p.order_id, req.user.id, p.method);
+  })();
+  if (p.buyer_id) notify(p.buyer_id, 'Pago aprobado: tu boleto está listo', `La orden ${p.code} fue aprobada. Descarga o muestra tu boleto con QR desde "Mis boletos".`, '#/tickets');
+  audit(req, 'PAYMENT_APPROVE', 'payment', p.id);
+  res.json({ ok: true });
+});
+router.post('/office/payments/:id/reject', ...office, (req, res) => {
+  const c = coopId(req), reason = String(req.body && req.body.reason || '').trim();
+  if (!reason) throw httpError(400, 'Indica el motivo del rechazo');
+  const p = db.prepare('SELECT p.*, o.coop_id, o.buyer_id, o.code FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.id=?').get(+req.params.id);
+  if (!p || p.coop_id !== c) throw httpError(404, 'Pago no encontrado');
+  if (p.status !== 'EN_REVISION') throw httpError(409, 'El pago no está en revisión');
+  const grace = S.get('review_grace_minutes');
+  tx(() => {
+    db.prepare("UPDATE payments SET status='RECHAZADO', reject_reason=?, reviewed_by=?, reviewed_at=? WHERE id=?").run(reason, req.user.id, nowLocal(), p.id);
+    db.prepare("UPDATE orders SET status='RESERVADO', expires_at=? WHERE id=?").run(addMinutes(nowLocal(), grace), p.order_id);
+  })();
+  if (p.buyer_id) notify(p.buyer_id, 'Pago rechazado', `Orden ${p.code}: ${reason}. Tienes ${grace} minutos para corregir y volver a enviar el comprobante.`, '#/orders');
+  audit(req, 'PAYMENT_REJECT', 'payment', p.id, null, { reason });
+  res.json({ ok: true });
+});
+
+router.get('/office/orders', ...office, (req, res) => {
+  const c = coopId(req), q = `%${String(req.query.q || '').trim()}%`;
+  core.expireOrders();
+  res.json(core.ordersWithTickets(`o.coop_id=? AND (o.code LIKE ? OR EXISTS (SELECT 1 FROM tickets t JOIN passengers p ON p.id=t.passenger_id WHERE t.order_id=o.id AND (p.cedula LIKE ? OR p.nombres||' '||p.apellidos LIKE ? OR p.email LIKE ? OR t.short_code LIKE ? OR t.number LIKE ?)) OR EXISTS (SELECT 1 FROM users u WHERE u.id=o.buyer_id AND u.email LIKE ?))` + (req.query.status ? ' AND o.status=?' : ''),
+    [c, q, q, q, q, q, q, q, ...(req.query.status ? [req.query.status] : [])]));
+});
+router.post('/office/orders/:id/collect', ...office, (req, res) => {
+  const c = coopId(req);
+  core.expireOrders();
+  const o = db.prepare('SELECT * FROM orders WHERE id=?').get(+req.params.id);
+  if (!o || o.coop_id !== c) throw httpError(404, 'Orden no encontrada');
+  if (o.status !== 'RESERVADO') throw httpError(409, 'La orden no está pendiente de pago (estado: ' + o.status + ')');
+  const sess = openSession(req.user); if (!sess) throw httpError(409, 'Abre tu caja antes de cobrar', 'CASH_CLOSED');
+  const rec = req.body && req.body.received_cents != null ? +req.body.received_cents : o.total_cents;
+  if (rec < o.total_cents) throw httpError(400, 'El monto recibido es menor al total');
+  tx(() => {
+    db.prepare("UPDATE payments SET status='RECHAZADO', reject_reason='Cobrado en oficina' WHERE order_id=? AND status IN ('PENDIENTE')").run(o.id);
+    db.prepare("INSERT INTO payments(order_id,method,amount_cents,status,received_cents,reviewed_by,reviewed_at,created_at) VALUES(?,'EFECTIVO',?,'APROBADO',?,?,?,?)").run(o.id, o.total_cents, rec, req.user.id, nowLocal(), nowLocal());
+    db.prepare('UPDATE orders SET cash_session_id=?, seller_id=?, office_id=? WHERE id=?').run(sess.id, req.user.id, req.user.office_id, o.id);
+    core.issueTickets(o.id, req.user.id, 'EFECTIVO');
+  })();
+  if (o.buyer_id) notify(o.buyer_id, 'Pago recibido', `Recibimos el pago de la orden ${o.code}. Tu boleto está disponible.`, '#/tickets');
+  audit(req, 'OFFICE_COLLECT', 'order', o.id);
+  res.json({ ...orderDetail(db.prepare('SELECT * FROM orders WHERE id=?').get(o.id)), change_cents: rec - o.total_cents });
+});
+
+router.post('/office/tickets/:id/void', ...office, (req, res) => {
+  const reason = String(req.body && req.body.reason || '').trim();
+  if (!reason) throw httpError(400, 'Indica el motivo de la anulación');
+  if (req.user.role === 'OFFICE' && !req.user.perm_void) throw httpError(403, 'No tienes permiso para anular boletos');
+  const t = ticketAccess(req, req.params.id);
+  if (!['VALIDO', 'RESERVADO'].includes(t.status)) throw httpError(409, 'Solo se pueden anular boletos vigentes y no abordados');
+  tx(() => {
+    db.prepare("UPDATE tickets SET status='ANULADO', void_reason=?, voided_by=? WHERE id=?").run(reason, req.user.id, t.id);
+    const left = db.prepare("SELECT COUNT(*) n FROM tickets WHERE order_id=? AND status IN ('VALIDO','RESERVADO','ABORDADO')").get(t.order_id).n;
+    if (!left) db.prepare("UPDATE orders SET status='CANCELADO' WHERE id=?").run(t.order_id);
+  })();
+  if (t.buyer_id) notify(t.buyer_id, 'Boleto anulado', `El boleto ${t.number} fue anulado: ${reason}`, '#/tickets');
+  audit(req, 'TICKET_VOID', 'ticket', t.id, { status: t.status }, { reason });
+  res.json({ ok: true });
+});
+/** Autocompleta pasajero por cédula (solo personal de la cooperativa) */
+router.get('/office/passenger', ...office, (req, res) => {
+  const p = db.prepare('SELECT cedula,nombres,apellidos,email,phone,category FROM passengers WHERE cedula=?').get(String(req.query.cedula || '').trim());
+  res.json(p || null);
+});
+router.get('/office/lookup', ...office, (req, res) => {
+  const c = coopId(req), q = String(req.query.q || '').trim().replace(/^.*\/v\//, '');
+  if (!q) return res.json([]);
+  const ids = db.prepare(`SELECT t.id FROM tickets t JOIN orders o ON o.id=t.order_id JOIN passengers p ON p.id=t.passenger_id WHERE o.coop_id=? AND t.status<>'EXPIRADO' AND (t.short_code=? OR t.number=? OR t.public_id=? OR substr(?,1,26)=t.public_id OR p.cedula=? OR o.code=?) ORDER BY t.id DESC LIMIT 30`).all(c, q.toUpperCase(), q, q.toUpperCase(), q.toUpperCase(), q, q.toUpperCase());
+  res.json(ids.map(r => publicTicket(core.ticketFull(r.id))));
+});
+
+/* Caja */
+function cashTotals(sid, opening) {
+  const rows = db.prepare(`SELECT p.method, SUM(p.amount_cents) amt, COUNT(*) n FROM payments p JOIN orders o ON o.id=p.order_id WHERE o.cash_session_id=? AND p.status='APROBADO' GROUP BY p.method`).all(sid);
+  const voids = db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(t.total_cents),0) amt FROM tickets t JOIN orders o ON o.id=t.order_id WHERE o.cash_session_id=? AND t.status='ANULADO'`).get(sid);
+  const cash = (rows.find(r => r.method === 'EFECTIVO') || { amt: 0 }).amt;
+  return { by_method: rows, voids, cash_cents: cash, expected_cents: opening + cash };
+}
+router.get('/office/cash/current', ...office, (req, res) => {
+  const s = openSession(req.user); if (!s) return res.json(null);
+  s.totals = cashTotals(s.id, s.opening_cents); res.json(s);
+});
+router.post('/office/cash/open', ...office, (req, res) => {
+  if (openSession(req.user)) throw httpError(409, 'Ya tienes una caja abierta');
+  const r = db.prepare('INSERT INTO cash_sessions(user_id,office_id,opened_at,opening_cents) VALUES(?,?,?,?)').run(req.user.id, req.user.office_id, nowLocal(), Math.round(+(req.body && req.body.opening_cents) || 0));
+  audit(req, 'CASH_OPEN', 'cash_session', r.lastInsertRowid);
+  res.status(201).json(db.prepare('SELECT * FROM cash_sessions WHERE id=?').get(r.lastInsertRowid));
+});
+router.post('/office/cash/close', ...office, (req, res) => {
+  const s = openSession(req.user); if (!s) throw httpError(409, 'No tienes caja abierta');
+  const t = cashTotals(s.id, s.opening_cents), counted = Math.round(+(req.body && req.body.counted_cents));
+  if (!(counted >= 0)) throw httpError(400, 'Ingresa el efectivo contado');
+  db.prepare('UPDATE cash_sessions SET closed_at=?, expected_cents=?, counted_cents=?, note=? WHERE id=?').run(nowLocal(), t.expected_cents, counted, req.body.note || null, s.id);
+  audit(req, 'CASH_CLOSE', 'cash_session', s.id, null, { expected: t.expected_cents, counted });
+  res.json({ id: s.id, expected_cents: t.expected_cents, counted_cents: counted, difference_cents: counted - t.expected_cents });
+});
+router.get('/office/cash/history', ...office, (req, res) => res.json(db.prepare('SELECT * FROM cash_sessions WHERE user_id=? ORDER BY id DESC LIMIT 30').all(req.user.id)));
+router.get('/office/cash/:id/print', ...office, (req, res) => {
+  const s = db.prepare('SELECT cs.*, u.nombres, u.apellidos FROM cash_sessions cs JOIN users u ON u.id=cs.user_id WHERE cs.id=?').get(+req.params.id);
+  if (!s || (s.user_id !== req.user.id && req.user.role === 'OFFICE')) throw httpError(404, 'Sesión no encontrada');
+  const t = cashTotals(s.id, s.opening_cents), exp = s.expected_cents == null ? t.expected_cents : s.expected_cents;
+  const body = `<h1>Cierre de caja #${s.id}</h1><p class="m">${docs.esc(s.nombres + ' ' + s.apellidos)} · Apertura ${s.opened_at} · Cierre ${s.closed_at || '(abierta)'}</p>
+  <table><tr><th>Método</th><th>Transacciones</th><th>Monto</th></tr>${t.by_method.map(r => `<tr><td>${r.method}</td><td>${r.n}</td><td>${money(r.amt)}</td></tr>`).join('')}</table>
+  <table><tr><td>Fondo inicial</td><td>${money(s.opening_cents)}</td></tr><tr><td>Efectivo esperado</td><td>${money(exp)}</td></tr><tr><td>Efectivo contado</td><td>${s.counted_cents == null ? '-' : money(s.counted_cents)}</td></tr>
+  <tr><th>Diferencia</th><th>${s.counted_cents == null ? '-' : money(s.counted_cents - exp)}</th></tr><tr><td>Boletos anulados</td><td>${t.voids.n} (${money(t.voids.amt)})</td></tr></table><div class="sig"><div>Oficinista</div><div>Supervisor</div></div>`;
+  res.type('html').send(docs.a4Page('Cierre de caja', body));
+});
+router.get('/office/dashboard', ...office, (req, res) => {
+  const c = coopId(req), d = nowLocal().slice(0, 10);
+  const q = (sql, ...p) => db.prepare(sql).get(...p);
+  res.json({
+    sales_today: q("SELECT COALESCE(SUM(total_cents),0) v, COUNT(*) n FROM orders WHERE coop_id=? AND status='PAGADO' AND substr(paid_at,1,10)=?", c, d),
+    pending_payments: q("SELECT COUNT(*) n FROM payments p JOIN orders o ON o.id=p.order_id WHERE o.coop_id=? AND p.status='EN_REVISION'", c).n,
+    cash_reservations: q("SELECT COUNT(*) n FROM orders WHERE coop_id=? AND status='RESERVADO' AND method='EFECTIVO'", c).n,
+    trips_today: q("SELECT COUNT(*) n FROM trips t JOIN frequencies f ON f.id=t.frequency_id WHERE f.coop_id=? AND t.date=? AND t.status<>'CANCELADO'", c, d).n,
+    session: openSession(req.user) || null,
+  });
+});
+
+/* Manifiesto de pasajeros (HTML A4 imprimible) */
+router.get('/manifest/:tripId', requireAuth, requireRole('OFFICE', 'COOP_ADMIN', 'DRIVER', 'ASSISTANT'), (req, res) => {
+  const t = core.getTrip(+req.params.tripId);
+  if (!t || (req.user.role !== 'SUPERADMIN' && t.coop_id !== req.user.coop_id)) throw httpError(404, 'Viaje no encontrado');
+  const rows = db.prepare(`SELECT tk.*, p.cedula, p.nombres, p.apellidos, s.label FROM tickets tk JOIN passengers p ON p.id=tk.passenger_id JOIN bus_seats s ON s.id=tk.seat_id WHERE tk.trip_id=? AND tk.status IN ('VALIDO','ABORDADO','BAJO') ORDER BY CAST(s.label AS INTEGER), s.label`).all(t.id);
+  const drv = t.driver_id ? db.prepare('SELECT nombres,apellidos FROM users WHERE id=?').get(t.driver_id) : null;
+  const body = `<h1>Manifiesto de pasajeros</h1><p><b>${docs.esc(t.coop_name)}</b> · ${docs.esc(t.stops[0].city)} - ${docs.esc(t.stops[t.stops.length - 1].city)} · ${t.depart_at.slice(0, 16)} · Bus ${docs.esc(t.bus_number)} (${docs.esc(t.plate)})</p><p class="m">Chofer: ${drv ? docs.esc(drv.nombres + ' ' + drv.apellidos) : '-'} · Pasajeros: ${rows.length}</p>
+  <table><tr><th>#</th><th>Asiento</th><th>Cédula</th><th>Pasajero</th><th>Tramo</th><th>Categoría</th><th>Estado</th></tr>${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${docs.esc(r.label)}</td><td>${r.cedula}</td><td>${docs.esc(r.nombres + ' ' + r.apellidos)}</td><td>${docs.esc(t.stops.find(s => s.ord === r.from_ord).city)} - ${docs.esc(t.stops.find(s => s.ord === r.to_ord).city)}</td><td>${r.category}</td><td>${r.status}</td></tr>`).join('')}</table><div class="sig"><div>Chofer</div><div>Despachador</div></div>`;
+  res.type('html').send(docs.a4Page('Manifiesto', body));
+});
 module.exports = router; module.exports.orderDetail = orderDetail; module.exports.publicTicket = publicTicket;
