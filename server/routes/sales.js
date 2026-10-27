@@ -260,4 +260,46 @@ router.post('/office/payments/:id/reject', ...office, (req, res) => {
   res.json({ ok: true });
 });
 
+router.get('/office/orders', ...office, (req, res) => {
+  const c = coopId(req), q = `%${String(req.query.q || '').trim()}%`;
+  core.expireOrders();
+  res.json(core.ordersWithTickets(`o.coop_id=? AND (o.code LIKE ? OR EXISTS (SELECT 1 FROM tickets t JOIN passengers p ON p.id=t.passenger_id WHERE t.order_id=o.id AND (p.cedula LIKE ? OR p.nombres||' '||p.apellidos LIKE ? OR p.email LIKE ? OR t.short_code LIKE ? OR t.number LIKE ?)) OR EXISTS (SELECT 1 FROM users u WHERE u.id=o.buyer_id AND u.email LIKE ?))` + (req.query.status ? ' AND o.status=?' : ''),
+    [c, q, q, q, q, q, q, q, ...(req.query.status ? [req.query.status] : [])]));
+});
+router.post('/office/orders/:id/collect', ...office, (req, res) => {
+  const c = coopId(req);
+  core.expireOrders();
+  const o = db.prepare('SELECT * FROM orders WHERE id=?').get(+req.params.id);
+  if (!o || o.coop_id !== c) throw httpError(404, 'Orden no encontrada');
+  if (o.status !== 'RESERVADO') throw httpError(409, 'La orden no está pendiente de pago (estado: ' + o.status + ')');
+  const sess = openSession(req.user); if (!sess) throw httpError(409, 'Abre tu caja antes de cobrar', 'CASH_CLOSED');
+  const rec = req.body && req.body.received_cents != null ? +req.body.received_cents : o.total_cents;
+  if (rec < o.total_cents) throw httpError(400, 'El monto recibido es menor al total');
+  tx(() => {
+    db.prepare("UPDATE payments SET status='RECHAZADO', reject_reason='Cobrado en oficina' WHERE order_id=? AND status IN ('PENDIENTE')").run(o.id);
+    db.prepare("INSERT INTO payments(order_id,method,amount_cents,status,received_cents,reviewed_by,reviewed_at,created_at) VALUES(?,'EFECTIVO',?,'APROBADO',?,?,?,?)").run(o.id, o.total_cents, rec, req.user.id, nowLocal(), nowLocal());
+    db.prepare('UPDATE orders SET cash_session_id=?, seller_id=?, office_id=? WHERE id=?').run(sess.id, req.user.id, req.user.office_id, o.id);
+    core.issueTickets(o.id, req.user.id, 'EFECTIVO');
+  })();
+  if (o.buyer_id) notify(o.buyer_id, 'Pago recibido', `Recibimos el pago de la orden ${o.code}. Tu boleto está disponible.`, '#/tickets');
+  audit(req, 'OFFICE_COLLECT', 'order', o.id);
+  res.json({ ...orderDetail(db.prepare('SELECT * FROM orders WHERE id=?').get(o.id)), change_cents: rec - o.total_cents });
+});
+
+router.post('/office/tickets/:id/void', ...office, (req, res) => {
+  const reason = String(req.body && req.body.reason || '').trim();
+  if (!reason) throw httpError(400, 'Indica el motivo de la anulación');
+  if (req.user.role === 'OFFICE' && !req.user.perm_void) throw httpError(403, 'No tienes permiso para anular boletos');
+  const t = ticketAccess(req, req.params.id);
+  if (!['VALIDO', 'RESERVADO'].includes(t.status)) throw httpError(409, 'Solo se pueden anular boletos vigentes y no abordados');
+  tx(() => {
+    db.prepare("UPDATE tickets SET status='ANULADO', void_reason=?, voided_by=? WHERE id=?").run(reason, req.user.id, t.id);
+    const left = db.prepare("SELECT COUNT(*) n FROM tickets WHERE order_id=? AND status IN ('VALIDO','RESERVADO','ABORDADO')").get(t.order_id).n;
+    if (!left) db.prepare("UPDATE orders SET status='CANCELADO' WHERE id=?").run(t.order_id);
+  })();
+  if (t.buyer_id) notify(t.buyer_id, 'Boleto anulado', `El boleto ${t.number} fue anulado: ${reason}`, '#/tickets');
+  audit(req, 'TICKET_VOID', 'ticket', t.id, { status: t.status }, { reason });
+  res.json({ ok: true });
+});
+
 module.exports = router; module.exports.orderDetail = orderDetail; module.exports.publicTicket = publicTicket;
