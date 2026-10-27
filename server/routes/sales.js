@@ -223,4 +223,41 @@ router.post('/office/sale', ...office, (req, res) => {
   res.status(201).json(d);
 });
 
+router.get('/office/payments', ...office, (req, res) => {
+  const c = coopId(req), st = req.query.status || 'EN_REVISION';
+  const rows = db.prepare(`SELECT p.*, o.code AS order_code, o.total_cents, o.buyer_id, o.trip_id, o.created_at AS order_created, u.nombres, u.apellidos, u.email FROM payments p JOIN orders o ON o.id=p.order_id LEFT JOIN users u ON u.id=o.buyer_id
+    WHERE o.coop_id=? AND p.status=? AND p.method IN ('TRANSFERENCIA','DEPOSITO') ORDER BY p.created_at`).all(c, st);
+  for (const r of rows) { r.trip = core.summarizeTrip(r.trip_id); r.tickets = db.prepare('SELECT s.label seat, p.nombres, p.apellidos, p.cedula FROM tickets t JOIN bus_seats s ON s.id=t.seat_id JOIN passengers p ON p.id=t.passenger_id WHERE t.order_id=?').all(r.order_id); r.waiting_min = diffMinutes(nowLocal(), r.created_at); }
+  res.json(rows);
+});
+router.post('/office/payments/:id/approve', ...office, (req, res) => {
+  const c = coopId(req), p = db.prepare('SELECT p.*, o.coop_id, o.buyer_id, o.code, o.total_cents FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.id=?').get(+req.params.id);
+  if (!p || p.coop_id !== c) throw httpError(404, 'Pago no encontrado');
+  if (p.status !== 'EN_REVISION') throw httpError(409, 'El pago no está en revisión');
+  if (p.amount_cents < p.total_cents) throw httpError(400, `El monto pagado (${money(p.amount_cents)}) es menor al total (${money(p.total_cents)}). Rechaza indicando la diferencia.`);
+  tx(() => {
+    db.prepare("UPDATE payments SET status='APROBADO', reviewed_by=?, reviewed_at=? WHERE id=?").run(req.user.id, nowLocal(), p.id);
+    db.prepare('UPDATE orders SET seller_id=COALESCE(seller_id,?), office_id=COALESCE(office_id,?) WHERE id=?').run(req.user.id, req.user.office_id, p.order_id);
+    core.issueTickets(p.order_id, req.user.id, p.method);
+  })();
+  if (p.buyer_id) notify(p.buyer_id, 'Pago aprobado: tu boleto está listo', `La orden ${p.code} fue aprobada. Descarga o muestra tu boleto con QR desde "Mis boletos".`, '#/tickets');
+  audit(req, 'PAYMENT_APPROVE', 'payment', p.id);
+  res.json({ ok: true });
+});
+router.post('/office/payments/:id/reject', ...office, (req, res) => {
+  const c = coopId(req), reason = String(req.body && req.body.reason || '').trim();
+  if (!reason) throw httpError(400, 'Indica el motivo del rechazo');
+  const p = db.prepare('SELECT p.*, o.coop_id, o.buyer_id, o.code FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.id=?').get(+req.params.id);
+  if (!p || p.coop_id !== c) throw httpError(404, 'Pago no encontrado');
+  if (p.status !== 'EN_REVISION') throw httpError(409, 'El pago no está en revisión');
+  const grace = S.get('review_grace_minutes');
+  tx(() => {
+    db.prepare("UPDATE payments SET status='RECHAZADO', reject_reason=?, reviewed_by=?, reviewed_at=? WHERE id=?").run(reason, req.user.id, nowLocal(), p.id);
+    db.prepare("UPDATE orders SET status='RESERVADO', expires_at=? WHERE id=?").run(addMinutes(nowLocal(), grace), p.order_id);
+  })();
+  if (p.buyer_id) notify(p.buyer_id, 'Pago rechazado', `Orden ${p.code}: ${reason}. Tienes ${grace} minutos para corregir y volver a enviar el comprobante.`, '#/orders');
+  audit(req, 'PAYMENT_REJECT', 'payment', p.id, null, { reason });
+  res.json({ ok: true });
+});
+
 module.exports = router; module.exports.orderDetail = orderDetail; module.exports.publicTicket = publicTicket;
