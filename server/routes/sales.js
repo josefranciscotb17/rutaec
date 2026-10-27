@@ -301,5 +301,66 @@ router.post('/office/tickets/:id/void', ...office, (req, res) => {
   audit(req, 'TICKET_VOID', 'ticket', t.id, { status: t.status }, { reason });
   res.json({ ok: true });
 });
+/** Autocompleta pasajero por cédula (solo personal de la cooperativa) */
+router.get('/office/passenger', ...office, (req, res) => {
+  const p = db.prepare('SELECT cedula,nombres,apellidos,email,phone,category FROM passengers WHERE cedula=?').get(String(req.query.cedula || '').trim());
+  res.json(p || null);
+});
+router.get('/office/lookup', ...office, (req, res) => {
+  const c = coopId(req), q = String(req.query.q || '').trim().replace(/^.*\/v\//, '');
+  if (!q) return res.json([]);
+  const ids = db.prepare(`SELECT t.id FROM tickets t JOIN orders o ON o.id=t.order_id JOIN passengers p ON p.id=t.passenger_id WHERE o.coop_id=? AND t.status<>'EXPIRADO' AND (t.short_code=? OR t.number=? OR t.public_id=? OR substr(?,1,26)=t.public_id OR p.cedula=? OR o.code=?) ORDER BY t.id DESC LIMIT 30`).all(c, q.toUpperCase(), q, q.toUpperCase(), q.toUpperCase(), q, q.toUpperCase());
+  res.json(ids.map(r => publicTicket(core.ticketFull(r.id))));
+});
+
+/* Caja */
+function cashTotals(sid, opening) {
+  const rows = db.prepare(`SELECT p.method, SUM(p.amount_cents) amt, COUNT(*) n FROM payments p JOIN orders o ON o.id=p.order_id WHERE o.cash_session_id=? AND p.status='APROBADO' GROUP BY p.method`).all(sid);
+  const voids = db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(t.total_cents),0) amt FROM tickets t JOIN orders o ON o.id=t.order_id WHERE o.cash_session_id=? AND t.status='ANULADO'`).get(sid);
+  const cash = (rows.find(r => r.method === 'EFECTIVO') || { amt: 0 }).amt;
+  return { by_method: rows, voids, cash_cents: cash, expected_cents: opening + cash };
+}
+router.get('/office/cash/current', ...office, (req, res) => {
+  const s = openSession(req.user); if (!s) return res.json(null);
+  s.totals = cashTotals(s.id, s.opening_cents); res.json(s);
+});
+router.post('/office/cash/open', ...office, (req, res) => {
+  if (openSession(req.user)) throw httpError(409, 'Ya tienes una caja abierta');
+  const r = db.prepare('INSERT INTO cash_sessions(user_id,office_id,opened_at,opening_cents) VALUES(?,?,?,?)').run(req.user.id, req.user.office_id, nowLocal(), Math.round(+(req.body && req.body.opening_cents) || 0));
+  audit(req, 'CASH_OPEN', 'cash_session', r.lastInsertRowid);
+  res.status(201).json(db.prepare('SELECT * FROM cash_sessions WHERE id=?').get(r.lastInsertRowid));
+});
+router.post('/office/cash/close', ...office, (req, res) => {
+  const s = openSession(req.user); if (!s) throw httpError(409, 'No tienes caja abierta');
+  const t = cashTotals(s.id, s.opening_cents), counted = Math.round(+(req.body && req.body.counted_cents));
+  if (!(counted >= 0)) throw httpError(400, 'Ingresa el efectivo contado');
+  db.prepare('UPDATE cash_sessions SET closed_at=?, expected_cents=?, counted_cents=?, note=? WHERE id=?').run(nowLocal(), t.expected_cents, counted, req.body.note || null, s.id);
+  audit(req, 'CASH_CLOSE', 'cash_session', s.id, null, { expected: t.expected_cents, counted });
+  res.json({ id: s.id, expected_cents: t.expected_cents, counted_cents: counted, difference_cents: counted - t.expected_cents });
+});
+router.get('/office/cash/history', ...office, (req, res) => res.json(db.prepare('SELECT * FROM cash_sessions WHERE user_id=? ORDER BY id DESC LIMIT 30').all(req.user.id)));
+router.get('/office/cash/:id/print', ...office, (req, res) => {
+  const s = db.prepare('SELECT cs.*, u.nombres, u.apellidos FROM cash_sessions cs JOIN users u ON u.id=cs.user_id WHERE cs.id=?').get(+req.params.id);
+  if (!s || (s.user_id !== req.user.id && req.user.role === 'OFFICE')) throw httpError(404, 'Sesión no encontrada');
+  const t = cashTotals(s.id, s.opening_cents), exp = s.expected_cents == null ? t.expected_cents : s.expected_cents;
+  const body = `<h1>Cierre de caja #${s.id}</h1><p class="m">${docs.esc(s.nombres + ' ' + s.apellidos)} · Apertura ${s.opened_at} · Cierre ${s.closed_at || '(abierta)'}</p>
+  <table><tr><th>Método</th><th>Transacciones</th><th>Monto</th></tr>${t.by_method.map(r => `<tr><td>${r.method}</td><td>${r.n}</td><td>${money(r.amt)}</td></tr>`).join('')}</table>
+  <table><tr><td>Fondo inicial</td><td>${money(s.opening_cents)}</td></tr><tr><td>Efectivo esperado</td><td>${money(exp)}</td></tr><tr><td>Efectivo contado</td><td>${s.counted_cents == null ? '-' : money(s.counted_cents)}</td></tr>
+  <tr><th>Diferencia</th><th>${s.counted_cents == null ? '-' : money(s.counted_cents - exp)}</th></tr><tr><td>Boletos anulados</td><td>${t.voids.n} (${money(t.voids.amt)})</td></tr></table><div class="sig"><div>Oficinista</div><div>Supervisor</div></div>`;
+  res.type('html').send(docs.a4Page('Cierre de caja', body));
+});
+router.get('/office/dashboard', ...office, (req, res) => {
+  const c = coopId(req), d = nowLocal().slice(0, 10);
+  const q = (sql, ...p) => db.prepare(sql).get(...p);
+  res.json({
+    sales_today: q("SELECT COALESCE(SUM(total_cents),0) v, COUNT(*) n FROM orders WHERE coop_id=? AND status='PAGADO' AND substr(paid_at,1,10)=?", c, d),
+    pending_payments: q("SELECT COUNT(*) n FROM payments p JOIN orders o ON o.id=p.order_id WHERE o.coop_id=? AND p.status='EN_REVISION'", c).n,
+    cash_reservations: q("SELECT COUNT(*) n FROM orders WHERE coop_id=? AND status='RESERVADO' AND method='EFECTIVO'", c).n,
+    trips_today: q("SELECT COUNT(*) n FROM trips t JOIN frequencies f ON f.id=t.frequency_id WHERE f.coop_id=? AND t.date=? AND t.status<>'CANCELADO'", c, d).n,
+    session: openSession(req.user) || null,
+  });
+});
+
+/* Manifiesto de pasajeros (HTML A4 imprimible) */
 
 module.exports = router; module.exports.orderDetail = orderDetail; module.exports.publicTicket = publicTicket;
