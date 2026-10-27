@@ -362,5 +362,13 @@ router.get('/office/dashboard', ...office, (req, res) => {
 });
 
 /* Manifiesto de pasajeros (HTML A4 imprimible) */
-
+router.get('/manifest/:tripId', requireAuth, requireRole('OFFICE', 'COOP_ADMIN', 'DRIVER', 'ASSISTANT'), (req, res) => {
+  const t = core.getTrip(+req.params.tripId);
+  if (!t || (req.user.role !== 'SUPERADMIN' && t.coop_id !== req.user.coop_id)) throw httpError(404, 'Viaje no encontrado');
+  const rows = db.prepare(`SELECT tk.*, p.cedula, p.nombres, p.apellidos, s.label FROM tickets tk JOIN passengers p ON p.id=tk.passenger_id JOIN bus_seats s ON s.id=tk.seat_id WHERE tk.trip_id=? AND tk.status IN ('VALIDO','ABORDADO','BAJO') ORDER BY CAST(s.label AS INTEGER), s.label`).all(t.id);
+  const drv = t.driver_id ? db.prepare('SELECT nombres,apellidos FROM users WHERE id=?').get(t.driver_id) : null;
+  const body = `<h1>Manifiesto de pasajeros</h1><p><b>${docs.esc(t.coop_name)}</b> · ${docs.esc(t.stops[0].city)} - ${docs.esc(t.stops[t.stops.length - 1].city)} · ${t.depart_at.slice(0, 16)} · Bus ${docs.esc(t.bus_number)} (${docs.esc(t.plate)})</p><p class="m">Chofer: ${drv ? docs.esc(drv.nombres + ' ' + drv.apellidos) : '-'} · Pasajeros: ${rows.length}</p>
+  <table><tr><th>#</th><th>Asiento</th><th>Cédula</th><th>Pasajero</th><th>Tramo</th><th>Categoría</th><th>Estado</th></tr>${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${docs.esc(r.label)}</td><td>${r.cedula}</td><td>${docs.esc(r.nombres + ' ' + r.apellidos)}</td><td>${docs.esc(t.stops.find(s => s.ord === r.from_ord).city)} - ${docs.esc(t.stops.find(s => s.ord === r.to_ord).city)}</td><td>${r.category}</td><td>${r.status}</td></tr>`).join('')}</table><div class="sig"><div>Chofer</div><div>Despachador</div></div>`;
+  res.type('html').send(docs.a4Page('Manifiesto', body));
+});
 module.exports = router; module.exports.orderDetail = orderDetail; module.exports.publicTicket = publicTicket;
