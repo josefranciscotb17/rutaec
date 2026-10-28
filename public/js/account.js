@@ -32,3 +32,11 @@ route('/forgot', async () => paint(view(), html`<div style="max-width:430px;marg
 App.A.doForgot = async (f) => guard($('button', f), async () => { await api('/auth/forgot', { method: 'POST', body: formObj(f) }); paint(f.parentElement, html`<h1>Revisa tu correo</h1><p>Si el correo existe, enviamos un enlace para restablecer tu contraseña (válido 30 minutos).</p>${App.cfg.demo ? html`<p class="small muted">Modo demostración: el correo queda en la bandeja interna (Superadmin → Auditoría y correos).</p>` : ''}`); });
 route('/reset', async (p, q) => paint(view(), html`<div style="max-width:430px;margin:20px auto" class="card"><h1>Nueva contraseña</h1><form data-submit="doReset"><input type="hidden" name="token" value="${q.token || ''}"><div class="field"><label>Nueva contraseña</label><input type="password" name="password" minlength="8" required></div><button class="btn block">Guardar</button></form></div>`));
 App.A.doReset = async (f) => guard($('button', f), async () => { await api('/auth/reset', { method: 'POST', body: formObj(f) }); toast('Contraseña actualizada', 'ok'); go('/login'); });
+
+/* ---------- Mis compras ---------- */
+route('/orders', async () => {
+  const list = await api('/orders/mine');
+  paint(view(), html`<h1>Mis compras</h1>${list.length ? list.map((o) => html`<div class="card"><div class="row spread"><div><b>${o.trip.origin} → ${o.trip.dest}</b> ${chip(o.status)}<div class="small muted">${o.coop_name} · ${fdt(o.depart_at_stop || o.trip.depart_at)} · ${o.tickets.length} boleto(s) · Orden ${o.code}</div>
+    <div class="small">${o.tickets.map((t) => `${t.seat_label} (${t.nombres})`).join(', ')}</div>${o.payment && o.payment.status === 'RECHAZADO' && o.status === 'RESERVADO' ? html`<div class="small" style="color:var(--err)">Pago rechazado: ${o.payment.reject_reason}</div>` : ''}</div>
+    <div class="right"><b style="font-size:1.2rem">${money(o.total_cents)}</b><div class="mt">${['RESERVADO', 'EN_REVISION'].includes(o.status) ? html`<a class="btn sm" href="#/checkout/${o.id}">${o.status === 'RESERVADO' ? 'Continuar pago' : 'Ver estado'}</a>` : o.status === 'PAGADO' ? html`<a class="btn sm" href="#/tickets">Ver boletos</a>` : ''}</div></div></div></div>`) : html`<div class="card">${empty('Aún no tienes compras.', '🧾')}<div class="center"><a class="btn" href="#/">Buscar viajes</a></div></div>`}`);
+}, ['CLIENT']);
