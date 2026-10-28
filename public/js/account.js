@@ -40,3 +40,29 @@ route('/orders', async () => {
     <div class="small">${o.tickets.map((t) => `${t.seat_label} (${t.nombres})`).join(', ')}</div>${o.payment && o.payment.status === 'RECHAZADO' && o.status === 'RESERVADO' ? html`<div class="small" style="color:var(--err)">Pago rechazado: ${o.payment.reject_reason}</div>` : ''}</div>
     <div class="right"><b style="font-size:1.2rem">${money(o.total_cents)}</b><div class="mt">${['RESERVADO', 'EN_REVISION'].includes(o.status) ? html`<a class="btn sm" href="#/checkout/${o.id}">${o.status === 'RESERVADO' ? 'Continuar pago' : 'Ver estado'}</a>` : o.status === 'PAGADO' ? html`<a class="btn sm" href="#/tickets">Ver boletos</a>` : ''}</div></div></div></div>`) : html`<div class="card">${empty('Aún no tienes compras.', '🧾')}<div class="center"><a class="btn" href="#/">Buscar viajes</a></div></div>`}`);
 }, ['CLIENT']);
+
+/* ---------- Mis boletos ---------- */
+route('/tickets', async (p, q) => {
+  const all = await api('/tickets/mine'), now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  const tab = q.tab || 'next';
+  const nextL = all.filter((t) => ['VALIDO', 'ABORDADO'].includes(t.status) && !['FINALIZADO', 'CANCELADO'].includes(t.trip_status)), past = all.filter((t) => !nextL.includes(t));
+  void now;
+  const list = tab === 'next' ? nextL : past;
+  paint(view(), html`<h1>Mis boletos</h1><div class="tabs"><a class="${tab === 'next' ? 'on' : ''}" href="#/tickets?tab=next">Próximos (${nextL.length})</a><a class="${tab === 'past' ? 'on' : ''}" href="#/tickets?tab=past">Historial (${past.length})</a></div>
+    ${list.length ? list.map(ticketCard) : html`<div class="card">${empty(tab === 'next' ? 'No tienes boletos próximos.' : 'Sin historial.', '🎫')}${tab === 'next' ? html`<div class="center"><a class="btn" href="#/">Comprar un pasaje</a></div>` : ''}</div>`}`);
+}, ['CLIENT']);
+function ticketCard(t) {
+  const active = ['VALIDO', 'ABORDADO'].includes(t.status);
+  return html`<div class="tk mb"><div><div class="hd" style="background:${t.coop_color}"><div class="row spread"><b>${t.coop}</b>${chip(t.status)}</div></div>
+    <div class="bd"><div class="route"><div>${t.from.city}<small>${ftime(t.depart_at)} · ${t.from.terminal}</small></div><span>→</span><div>${t.to.city}<small>${ftime(t.arrive_at)} · ${t.to.terminal}</small></div></div>
+    <div class="muted small mt">${fdate(t.depart_at)}</div>
+    <div class="grid g2 mt small"><div><span class="muted">Pasajero</span><br><b>${t.nombres} ${t.apellidos}</b><br>${t.cedula_masked}</div><div><span class="muted">Asiento</span><br><b>${t.seat_label}</b> · ${t.seat_type}<br>Bus ${t.bus_number} ${t.platform ? '· Andén ' + t.platform : ''}</div>
+    <div><span class="muted">Boleto N.º</span><br><span class="mono">${t.number}</span></div><div><span class="muted">Total</span><br><b>${money(t.total_cents)}</b> · ${CAT[t.category]}</div></div>
+    <div class="row mt noprint"><button class="btn sm" data-act="bigQr" data-id="${t.id}" ${active ? '' : raw('disabled')}>Pantalla completa</button><button class="btn sm sec" data-act="tkPdf" data-id="${t.id}">PDF</button><button class="btn sm sec" data-act="dlQr" data-id="${t.id}">Guardar QR</button>
+    ${['ABORDADO', 'BAJO'].includes(t.status) ? html`<button class="btn sm ghost" data-act="rate" data-trip="${t.trip_id}">Calificar viaje</button>` : ''}</div></div></div>
+    <div class="qr">${active ? html`<img data-src="/tickets/${t.id}/qr.png" alt="Código QR del boleto" width="180" height="180"><div class="mono small" style="letter-spacing:2px">${t.short_code}</div><div class="small muted">Código manual</div>` : html`<div class="muted">QR no disponible<br>(${STATUS[t.status] ? STATUS[t.status][1] : t.status})</div>`}</div></div>`;
+}
+App.A.tkPdf = (el) => openFile(`/tickets/${el.dataset.id}/pdf`);
+App.A.dlQr = async (el) => { const u = await blobUrl(`/tickets/${el.dataset.id}/qr.png`); const a = document.createElement('a'); a.href = u; a.download = `boleto-qr-${el.dataset.id}.png`; a.click(); };
+App.A.bigQr = (el) => { modal('Muestra este código al abordar', html`<div class="center"><img data-src="/tickets/${el.dataset.id}/qr.png" alt="QR" style="width:min(80vw,380px);height:auto"><p class="small muted">Sube el brillo de tu pantalla. No compartas este código: es de un solo uso.</p></div>`); };
+App.A.rate = async (el) => { const stars = await promptBox('Calificar viaje', 'Estrellas (1 a 5)', { type: 'number', value: '5', okLabel: 'Enviar' }); if (!stars) return; try { await api(`/trips/${el.dataset.trip}/rating`, { method: 'POST', body: { stars: +stars } }); toast('¡Gracias por tu calificación!', 'ok'); } catch (e) { toast(e.message, 'err'); } };
