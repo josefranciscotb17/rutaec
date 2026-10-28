@@ -22,3 +22,19 @@ route('/admin/coops', async () => {
   await crudRender($('#crud_coops'), spec);
 }, ADM);
 App.A.ctxCoop = (el) => { try { localStorage.setItem('rutaec_coop', el.dataset.id); } catch (e) { /* */ } shellKey = ''; go('/coop'); };
+
+route('/admin/users', async (p, q) => {
+  const [coops, users] = await Promise.all([api('/admin/cooperatives'), api('/admin/users?' + new URLSearchParams(q))]);
+  window.__coops = coops;
+  paint(view(), html`<div class="row spread"><h1>Usuarios</h1>${isSA() ? html`<button class="btn" data-act="uNew">+ Superadmin / auditor / admin de cooperativa</button>` : ''}</div>
+    <div class="card mb"><form data-submit="uSearch" class="row"><input name="q" class="grow" placeholder="Nombre, correo o cédula" value="${q.q || ''}"><select name="role" style="width:auto"><option value="">Todos los roles</option>${Object.entries(ROLE).map(([k, v]) => html`<option value="${k}" ${q.role === k ? raw('selected') : ''}>${v}</option>`)}</select><select name="coop_id" style="width:auto"><option value="">Todas las cooperativas</option>${opts(coops, q.coop_id, (c) => c.id, (c) => c.short_name || c.name)}</select><button class="btn">Filtrar</button></form></div>
+    <div class="card">${users.length ? tbl(['Usuario', 'Rol', 'Cooperativa', 'Último ingreso', 'Estado', ''], users.map((u) => html`<tr><td><b>${u.nombres} ${u.apellidos}</b><div class="small muted">${u.email}</div></td><td>${ROLE[u.role]}</td><td>${u.coop || '—'}</td><td class="small">${u.last_login || '—'}</td><td>${u.locked_until && u.locked_until > '0' ? chip('PENDIENTE') : ''} ${u.active ? chip('ACTIVO') : chip('BAJA')}</td>
+      <td class="right nowrap">${isSA() ? html`<button class="btn sm sec" data-act="uToggle" data-id="${u.id}" data-a="${u.active ? 0 : 1}">${u.active ? 'Suspender' : 'Activar'}</button> <button class="btn sm sec" data-act="uReset" data-id="${u.id}">Clave</button>` : ''}</td></tr>`)) : empty('Sin resultados.', '👤')}</div>`);
+}, ADM);
+App.A.uSearch = (f) => { const o = formObj(f); go('/admin/users?' + new URLSearchParams(Object.fromEntries(Object.entries(o).filter(([, v]) => v)))); };
+App.A.uToggle = async (el) => { try { await api('/admin/users/' + el.dataset.id, { method: 'PUT', body: { active: +el.dataset.a } }); dispatch(); } catch (e) { toast(e.message, 'err'); } };
+App.A.uReset = async (el) => { if (!(await confirmBox('Restablecer contraseña', 'Se generará una contraseña temporal.', 'Restablecer'))) return; try { const r = await api(`/admin/users/${el.dataset.id}/reset-password`, { method: 'POST' }); modal('Contraseña temporal', html`<div class="alert ok mono" style="font-size:1.4rem;text-align:center">${r.temp_password}</div>`); } catch (e) { toast(e.message, 'err'); } };
+App.A.uNew = () => modal('Nuevo usuario', html`<form data-submit="uCreate"><div class="frm"><div><label>Nombres</label><input name="nombres" required></div><div><label>Apellidos</label><input name="apellidos" required></div><div class="full"><label>Correo</label><input type="email" name="email" required></div><div><label>Rol</label><select name="role"><option value="COOP_ADMIN">Administrador de cooperativa</option><option value="AUDITOR">Auditor</option><option value="SUPERADMIN">Superadministrador</option></select></div><div><label>Cooperativa (si aplica)</label><select name="coop_id"><option value="">—</option>${opts(window.__coops, '', (c) => c.id, (c) => c.short_name || c.name)}</select></div></div><button class="btn mt">Crear</button></form>`);
+App.A.uCreate = (f) => guard($('button', f), async () => { const o = formObj(f); const r = await api('/admin/users', { method: 'POST', body: { ...o, coop_id: o.coop_id ? +o.coop_id : null } }); closeModal(); modal('Usuario creado', html`<p>Contraseña temporal:</p><div class="alert ok mono" style="font-size:1.4rem;text-align:center">${r.temp_password}</div>`, { onclose: dispatch }); });
+
+/* ---------- Sitio y reglas ---------- */
