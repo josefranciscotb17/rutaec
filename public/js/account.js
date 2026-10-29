@@ -66,3 +66,15 @@ App.A.tkPdf = (el) => openFile(`/tickets/${el.dataset.id}/pdf`);
 App.A.dlQr = async (el) => { const u = await blobUrl(`/tickets/${el.dataset.id}/qr.png`); const a = document.createElement('a'); a.href = u; a.download = `boleto-qr-${el.dataset.id}.png`; a.click(); };
 App.A.bigQr = (el) => { modal('Muestra este código al abordar', html`<div class="center"><img data-src="/tickets/${el.dataset.id}/qr.png" alt="QR" style="width:min(80vw,380px);height:auto"><p class="small muted">Sube el brillo de tu pantalla. No compartas este código: es de un solo uso.</p></div>`); };
 App.A.rate = async (el) => { const stars = await promptBox('Calificar viaje', 'Estrellas (1 a 5)', { type: 'number', value: '5', okLabel: 'Enviar' }); if (!stars) return; try { await api(`/trips/${el.dataset.trip}/rating`, { method: 'POST', body: { stars: +stars } }); toast('¡Gracias por tu calificación!', 'ok'); } catch (e) { toast(e.message, 'err'); } };
+
+/* ---------- Perfil ---------- */
+route('/profile', async () => {
+  const u = App.user;
+  paint(view(), html`<div style="max-width:720px;margin:auto"><h1>Mi perfil</h1>${u.must_change ? html`<div class="alert warn">Tu contraseña es temporal. Cámbiala para continuar usando el sistema con seguridad.</div>` : ''}
+    <div class="card"><div class="row spread"><div><b>${u.nombres} ${u.apellidos}</b><div class="small muted">${u.email} · ${ROLE[u.role]} ${u.coop ? '· ' + u.coop.name : ''}</div></div></div>
+    <form data-submit="saveProfile" class="mt"><div class="frm"><div><label>Nombres</label><input name="nombres" value="${u.nombres}"></div><div><label>Apellidos</label><input name="apellidos" value="${u.apellidos}"></div><div><label>Celular</label><input name="phone" value="${u.phone || ''}"></div><div><label>Cédula</label><input value="${u.cedula || ''}" disabled></div></div><button class="btn mt">Guardar</button></form></div>
+    <div class="card"><h3>Cambiar contraseña</h3><form data-submit="changePass"><div class="frm"><div><label>Actual</label><input type="password" name="current" required></div><div><label>Nueva</label><input type="password" name="password" minlength="8" required></div></div><button class="btn mt">Actualizar</button></form></div>
+    <div class="card"><h3>Mis datos (LOPDP)</h3><p class="small muted">Puedes pedir acceso, rectificación o eliminación de tus datos escribiendo a ${App.cfg.support_email}.</p><button class="btn err sm" data-act="logout">Cerrar sesión</button></div></div>`);
+}, ['CLIENT', 'OFFICE', 'DRIVER', 'ASSISTANT', 'COOP_ADMIN', 'AUDITOR']);
+App.A.saveProfile = async (f) => guard($('button', f), async () => { App.user = { ...App.user, ...(await api('/auth/me', { method: 'PUT', body: formObj(f) })) }; toast('Perfil actualizado', 'ok'); });
+App.A.changePass = async (f) => guard($('button', f), async () => { await api('/auth/change-password', { method: 'POST', body: formObj(f) }); App.user.must_change = 0; f.reset(); toast('Contraseña actualizada', 'ok'); });
