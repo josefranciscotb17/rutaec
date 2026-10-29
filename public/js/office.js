@@ -124,3 +124,29 @@ App.A.approve = async (el) => { if (!(await confirmBox('Aprobar pago', 'Verifica
 App.A.reject = async (el) => { const r = await promptBox('Rechazar pago', 'Motivo (se enviará al cliente)', { area: true, okLabel: 'Rechazar' }); if (!r) return; await guard(el, async () => { await api(`/office/payments/${el.dataset.id}/reject`, { method: 'POST', body: { reason: r } }); toast('Pago rechazado', 'ok'); drawPayments(); }); };
 
 /* ---------- Órdenes ---------- */
+route('/office/orders', async (p, q) => {
+  paint(view(), html`<h1>Órdenes y búsqueda</h1><div class="card mb"><form data-submit="ordSearch" class="row"><input name="q" class="grow" placeholder="Código de orden, cédula, nombre, correo, N.º de boleto o código QR…" value="${q.q || ''}"><select name="status" style="width:auto"><option value="">Todos</option>${['RESERVADO', 'EN_REVISION', 'PAGADO', 'EXPIRADO', 'CANCELADO'].map((s) => html`<option ${q.status === s ? raw('selected') : ''}>${s}</option>`)}</select><button class="btn">Buscar</button></form></div><div id="ordList">${loading()}</div>`);
+  await ordList(q);
+}, OFF);
+App.A.ordSearch = (f) => { const o = formObj(f); go('/office/orders?' + new URLSearchParams(Object.fromEntries(Object.entries(o).filter(([, v]) => v)))); };
+let ORD = [];
+async function ordList(q) {
+  ORD = await api('/office/orders?' + new URLSearchParams({ q: q.q || '', ...(q.status ? { status: q.status } : {}) }));
+  paint($('#ordList'), ORD.length ? html`<div class="card">${tbl(['Código', 'Viaje', 'Pasajeros', 'Total', 'Estado', ''], ORD.map((o) => html`<tr><td class="mono">${o.code}</td><td>${o.trip.origin}→${o.trip.dest}<div class="small muted">${fdt(o.trip.depart_at)}</div></td><td class="small">${o.tickets.map((t) => `${t.seat_label} ${t.nombres.split(' ')[0]} ${t.apellidos.split(' ')[0]}`).join(', ')}</td><td>${money(o.total_cents)}</td><td>${chip(o.status)}</td>
+      <td class="right nowrap">${o.status === 'RESERVADO' ? html`<button class="btn sm ok" data-act="collect" data-id="${o.id}">Cobrar</button> ` : ''}<button class="btn sm sec" data-act="ordView" data-id="${o.id}">Ver</button></td></tr>`))}</div>` : html`<div class="card">${empty('Sin resultados.', '🔍')}</div>`);
+}
+App.A.ordView = (el) => {
+  const o = ORD.find((x) => String(x.id) === el.dataset.id);
+  modal('Orden ' + o.code, html`<p>${chip(o.status)} · ${o.channel || ''} · ${money(o.total_cents)} · ${o.method || ''}</p><div class="muted small">${o.trip.origin} → ${o.trip.dest} · ${fdt(o.trip.depart_at)}</div>
+    ${tbl(['Asiento', 'Pasajero', 'Cédula', 'Boleto', 'Estado', ''], o.tickets.map((t) => html`<tr><td>${t.seat_label}</td><td>${t.nombres} ${t.apellidos}</td><td>${t.cedula}</td><td class="mono small">${t.number || '-'}</td><td>${chip(t.status)}</td>
+      <td class="nowrap">${['VALIDO', 'ABORDADO'].includes(t.status) ? html`<button class="btn sm" data-act="prTicket" data-id="${t.id}" data-re="1" title="Reimprimir (queda registrado)">🖨️</button> <button class="btn sm sec" data-act="tkPdf" data-id="${t.id}">PDF</button>` : ''} ${['VALIDO', 'RESERVADO'].includes(t.status) ? html`<button class="btn sm err" data-act="voidTk" data-id="${t.id}">Anular</button>` : ''}</td></tr>`))}
+    ${o.status === 'PAGADO' ? html`<div class="row mt"><button class="btn" data-act="prOrder" data-id="${o.id}">🖨️ Imprimir todos</button><button class="btn sec" data-act="orderPdf" data-id="${o.id}">PDF de la orden</button></div>` : ''}`, { wide: true });
+};
+App.A.voidTk = async (el) => { const r = await promptBox('Anular boleto', 'Motivo de la anulación', { area: true, okLabel: 'Anular' }); if (!r) return; try { await api(`/office/tickets/${el.dataset.id}/void`, { method: 'POST', body: { reason: r } }); toast('Boleto anulado', 'ok'); closeModal(); ordList(parseHash().q); } catch (e) { toast(e.message, 'err'); } };
+App.A.collect = async (el) => {
+  const o = ORD.find((x) => String(x.id) === el.dataset.id);
+  const v = await promptBox('Cobrar en efectivo ' + o.code, `Efectivo recibido (total ${money(o.total_cents)})`, { type: 'number', value: (o.total_cents / 100).toFixed(2), okLabel: 'Cobrar' }); if (!v) return;
+  try { const r = await api(`/office/orders/${o.id}/collect`, { method: 'POST', body: { received_cents: Math.round(parseFloat(v) * 100) } }); await ordList(parseHash().q); saleDone(r); } catch (e) { toast(e.message, 'err'); if (e.code === 'CASH_CLOSED') go('/office/cash'); }
+};
+
+/* ---------- Caja ---------- */
