@@ -105,3 +105,22 @@ function saleDone(r) {
 }
 App.A.prOrder = (el) => openPrint(`/orders/${el.dataset.id}/print`, `&w=${pw()}&auto=1`);
 App.A.prTicket = (el) => openPrint(`/tickets/${el.dataset.id}/print`, `&w=${pw()}&auto=1&reprint=${el.dataset.re || 0}`);
+
+/* ---------- Validación de pagos ---------- */
+route('/office/payments', async () => { await drawPayments(); every(drawPayments, 20000); }, OFF);
+async function drawPayments() {
+  const list = await api('/office/payments');
+  if (!$('#view')) return;
+  paint(view(), html`<div class="row spread"><h1>Pagos por validar</h1><span class="chip info">${list.length} pendientes</span></div>
+    ${list.length ? list.map((p) => html`<div class="card"><div class="row spread" style="align-items:start"><div class="grow"><b>Orden ${p.order_code}</b> <span class="chip ${p.waiting_min > 15 ? 'err' : 'warn'}">espera ${p.waiting_min} min</span>
+      <div class="small muted">${p.nombres ? p.nombres + ' ' + p.apellidos + ' · ' + p.email : ''}</div><div class="mt">${p.trip.origin} → ${p.trip.dest} · ${fdt(p.trip.depart_at)} · Bus ${p.trip.bus_number}</div>
+      <div class="small mt">${p.tickets.map((t) => `${t.seat}: ${t.nombres} ${t.apellidos} (${t.cedula})`).join(' | ')}</div>
+      <table class="mt" style="max-width:420px"><tr><td class="muted">Total de la orden</td><td class="right"><b>${money(p.total_cents)}</b></td></tr><tr><td class="muted">Monto del comprobante</td><td class="right"><b style="${p.amount_cents !== p.total_cents ? 'color:var(--err)' : ''}">${money(p.amount_cents)}</b></td></tr><tr><td class="muted">Banco / referencia</td><td class="right">${p.bank || '-'} · <span class="mono">${p.reference}</span></td></tr><tr><td class="muted">Fecha del pago</td><td class="right">${p.paid_date || '-'}</td></tr></table></div>
+      <div class="center">${/\.pdf$/i.test(p.proof_file) ? html`<button class="btn sec" data-act="viewProof" data-f="${p.proof_file}">Abrir PDF</button>` : html`<img data-src="/files/${p.proof_file}" alt="Comprobante" style="max-width:200px;max-height:220px;border-radius:10px;border:1px solid var(--line);cursor:zoom-in" data-act="viewProof" data-f="${p.proof_file}">`}<div class="small muted">toca para ampliar</div></div></div>
+      <div class="row mt"><button class="btn ok" data-act="approve" data-id="${p.id}">✔ Aprobar y emitir</button><button class="btn err" data-act="reject" data-id="${p.id}">✖ Rechazar</button></div></div>`) : html`<div class="card">${empty('No hay comprobantes pendientes. ¡Todo al día!', '✅')}</div>`}`);
+}
+App.A.viewProof = async (el) => { const f = el.dataset.f; if (/\.pdf$/i.test(f)) return openFile('/files/' + f); modal('Comprobante', html`<img data-src="/files/${f}" style="max-width:100%">`, { wide: true }); };
+App.A.approve = async (el) => { if (!(await confirmBox('Aprobar pago', 'Verifica que el dinero ya esté en la cuenta de la cooperativa. Se emitirán los boletos.', 'Aprobar'))) return; await guard(el, async () => { await api(`/office/payments/${el.dataset.id}/approve`, { method: 'POST' }); toast('Pago aprobado y boletos emitidos', 'ok'); drawPayments(); }); };
+App.A.reject = async (el) => { const r = await promptBox('Rechazar pago', 'Motivo (se enviará al cliente)', { area: true, okLabel: 'Rechazar' }); if (!r) return; await guard(el, async () => { await api(`/office/payments/${el.dataset.id}/reject`, { method: 'POST', body: { reason: r } }); toast('Pago rechazado', 'ok'); drawPayments(); }); };
+
+/* ---------- Órdenes ---------- */
