@@ -78,3 +78,14 @@ route('/profile', async () => {
 }, ['CLIENT', 'OFFICE', 'DRIVER', 'ASSISTANT', 'COOP_ADMIN', 'AUDITOR']);
 App.A.saveProfile = async (f) => guard($('button', f), async () => { App.user = { ...App.user, ...(await api('/auth/me', { method: 'PUT', body: formObj(f) })) }; toast('Perfil actualizado', 'ok'); });
 App.A.changePass = async (f) => guard($('button', f), async () => { await api('/auth/change-password', { method: 'POST', body: formObj(f) }); App.user.must_change = 0; f.reset(); toast('Contraseña actualizada', 'ok'); });
+
+/* ---------- Información ---------- */
+route('/help', async () => {
+  const c = App.cfg;
+  paint(view(), html`<div style="max-width:800px;margin:auto"><h1>Ayuda y preguntas frecuentes</h1>${(c.faq || []).map(([q, a]) => html`<details class="card"><summary><b>${q}</b></summary><p>${a}</p></details>`)}
+    <div class="card mt"><h3>Contáctanos</h3><p>${c.support_email} · ${c.support_phone}<br><span class="muted small">${c.support_hours}</span></p>${c.whatsapp ? html`<a class="btn ok" target="_blank" rel="noopener" href="https://wa.me/${c.whatsapp}">WhatsApp</a>` : ''}</div>
+    <div class="card"><h3>Verifica un boleto</h3><p class="small muted">Pega el código del boleto (o el enlace del QR) para comprobar si es válido.</p><form data-submit="verifyCode" class="row"><input name="code" class="grow" placeholder="Código" required><button class="btn">Verificar</button></form><div id="vres" class="mt"></div></div></div>`);
+});
+App.A.verifyCode = async (f) => { const c = formObj(f).code.replace(/^.*\/v\//, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase(); const r = await api('/verify/' + c); paint($('#vres'), r.valid ? html`<div class="alert ok"><b>Boleto válido</b><br>${r.coop} · ${r.route} · ${r.depart_at} · asiento ${r.seat}</div>` : html`<div class="alert err"><b>No válido</b> ${r.reason || ''}</div>`); };
+const textPage = (key, title) => route('/' + key, async () => paint(view(), html`<div style="max-width:800px;margin:auto" class="card"><h1>${title}</h1><p style="white-space:pre-line">${App.cfg[{ terms: 'terms', privacy: 'privacy' }[key]]}</p><h3>Política de devoluciones</h3><p>${App.cfg.refund_policy}</p></div>`));
+textPage('terms', 'Términos y condiciones'); textPage('privacy', 'Política de privacidad');
