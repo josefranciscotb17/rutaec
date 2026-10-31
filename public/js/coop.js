@@ -132,3 +132,56 @@ route('/coop/sheets/:id', async (p) => {
 App.A.shPrint = (el) => openPrint(`/coop/route-sheets/${el.dataset.id}/print`);
 App.A.shPublish = (el) => guard(el, async () => { try { const x = await api(`/coop/route-sheets/${el.dataset.id}/publish`, { method: 'POST', body: {} }); toast(`${x.created} viajes creados, ${x.updated} actualizados`, 'ok'); dispatch(); } catch (e) { if (e.code === 'CONFLICTS' && (await confirmBox('Conflictos', e.message + '. ¿Publicar de todas formas?', 'Publicar'))) { const x = await api(`/coop/route-sheets/${el.dataset.id}/publish`, { method: 'POST', body: { force: true } }); toast(`${x.created} viajes creados`, 'ok'); dispatch(); } else if (e.code !== 'CONFLICTS') throw e; } });
 App.A.shDelete = async (el) => { if (!(await confirmBox('Eliminar borrador', '¿Eliminar esta hoja de ruta?', 'Eliminar'))) return; try { await api('/coop/route-sheets/' + el.dataset.id, { method: 'DELETE' }); go('/coop/sheets'); } catch (e) { toast(e.message, 'err'); } };
+
+/* ---------- Frecuencias y tarifas ---------- */
+let FQ = null;
+route('/coop/frequencies', async () => {
+  const [list, terms] = await Promise.all([api('/coop/frequencies'), api('/coop/terminals')]);
+  FQ = { list, terms };
+  paint(view(), html`<div class="row spread"><h1>Frecuencias y tarifas</h1>${canWrite() ? html`<button class="btn" data-act="fqNew">+ Nueva frecuencia</button>` : ''}</div>
+    <div class="card">${list.length ? tbl(['Salida', 'Ruta', 'Paradas', 'Duración', 'Días', 'Tarifa completa', 'Resolución ANT', 'Estado', ''], list.map((f) => { const full = f.fares.find((x) => x.from_ord === 0 && x.to_ord === f.stops.length - 1); return html`<tr><td><b>${f.depart_time}</b></td><td>${f.origin} → ${f.dest}</td><td>${f.stops.map((s) => s.city).join(' · ')}</td><td>${dur(f.duration_min)}</td><td class="small">${['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((d, i) => (f.days[i] === '1' ? d : '·')).join(' ')}</td><td>${full ? money(full.price_cents) : '—'}</td><td class="small">${f.resolution_number || '—'}</td><td>${f.active ? chip('ACTIVO') : chip('BAJA')}</td><td class="right nowrap">${canWrite() ? html`<button class="btn sm sec" data-act="fqEdit" data-id="${f.id}">Editar</button> <button class="btn sm err" data-act="fqDel" data-id="${f.id}">✕</button>` : ''}</td></tr>`; })) : empty('Define tu primera frecuencia (ruta, horario y tarifas).', '🛣️')}</div>`);
+}, CO);
+const termOpts = () => FQ.terms.map((t) => [t.id, `${t.city} · ${t.name}`]);
+App.A.fqNew = () => fqOpen(null);
+App.A.fqEdit = (el) => fqOpen(FQ.list.find((f) => String(f.id) === el.dataset.id));
+function fqOpen(f) {
+  FQ.cur = f ? { id: f.id, stops: f.stops.map((s) => ({ terminal_id: s.terminal_id, minutes: s.minutes, km: s.km })), fares: Object.fromEntries(f.fares.map((x) => [x.from_ord + '-' + x.to_ord, x.price_cents])) } : { id: null, stops: [{ terminal_id: FQ.terms[0].id, minutes: 0, km: 0 }, { terminal_id: FQ.terms[1].id, minutes: 240, km: 200 }], fares: {} };
+  modal(f ? 'Editar frecuencia' : 'Nueva frecuencia', html`<form data-submit="fqSave"><div class="frm"><div><label>Hora de salida</label><input type="time" name="depart_time" value="${f ? f.depart_time : '07:00'}" required></div><div><label>Duración total (min)</label><input type="number" name="duration_min" min="15" value="${f ? f.duration_min : 240}" required data-change="fqDur"></div>
+    <div><label>N.º de resolución ANT</label><input name="resolution_number" value="${f ? f.resolution_number || '' : ''}"></div><div><label>Fecha de resolución</label><input type="date" name="resolution_date" value="${f ? f.resolution_date || '' : ''}"></div></div>
+    <label class="mt">Días de operación</label><div class="row">${['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map((d, i) => html`<label class="chip" style="cursor:pointer"><input type="checkbox" name="d${i}" ${(!f || f.days[i] === '1') ? raw('checked') : ''}> ${d}</label>`)}</div>
+    <label class="mt"><input type="checkbox" name="active" ${(!f || f.active) ? raw('checked') : ''}> Frecuencia activa</label>
+    <h3 class="mt">Paradas (primera = origen, última = destino)</h3><div id="fqStops"></div><button type="button" class="btn sm sec" data-act="fqAddStop">+ Agregar parada intermedia</button>
+    <h3 class="mt">Tarifas por tramo (USD)</h3><div class="row mb"><input id="fqFull" type="number" step="0.05" min="0.5" placeholder="Tarifa completa origen→destino" style="max-width:260px"><button type="button" class="btn sm sec" data-act="fqCalc">Calcular proporcional a los km</button></div><div id="fqFares"></div>
+    <button class="btn mt block lg">Guardar frecuencia</button></form>`, { wide: true });
+  fqStops(); fqFares();
+}
+function fqStops() {
+  const S = FQ.cur.stops;
+  paint($('#fqStops'), html`${S.map((s, i) => html`<div class="row mb" style="align-items:end"><div class="grow" style="min-width:200px"><label>${i === 0 ? 'Origen' : i === S.length - 1 ? 'Destino' : 'Parada ' + i}</label><select data-change="fqStopSet" data-i="${i}" data-k="terminal_id">${termOpts().map((o) => html`<option value="${o[0]}" ${o[0] === s.terminal_id ? raw('selected') : ''}>${o[1]}</option>`)}</select></div>
+    <div style="width:110px"><label>Minutos</label><input type="number" value="${s.minutes}" ${i === 0 || i === S.length - 1 ? raw('disabled') : ''} data-change="fqStopSet" data-i="${i}" data-k="minutes"></div><div style="width:110px"><label>Km</label><input type="number" value="${s.km}" ${i === 0 ? raw('disabled') : ''} data-change="fqStopSet" data-i="${i}" data-k="km"></div>${i > 0 && i < S.length - 1 ? html`<button type="button" class="btn sm err" data-act="fqDelStop" data-i="${i}">✕</button>` : ''}</div>`)}`);
+}
+App.A.fqStopSet = (el) => { const s = FQ.cur.stops[+el.dataset.i]; s[el.dataset.k] = +el.value; if (el.dataset.k === 'terminal_id') return; };
+App.A.fqDur = (el) => { const S = FQ.cur.stops; S[S.length - 1].minutes = +el.value; fqStops(); };
+App.A.fqAddStop = () => { const S = FQ.cur.stops, last = S[S.length - 1], prev = S[S.length - 2]; S.splice(S.length - 1, 0, { terminal_id: FQ.terms[0].id, minutes: Math.round((prev.minutes + last.minutes) / 2), km: Math.round((prev.km + last.km) / 2) }); fqStops(); fqFares(); };
+App.A.fqDelStop = (el) => { FQ.cur.stops.splice(+el.dataset.i, 1); FQ.cur.fares = {}; fqStops(); fqFares(); };
+function fqFares() {
+  const S = FQ.cur.stops, rows = [];
+  for (let a = 0; a < S.length - 1; a++) for (let b = a + 1; b < S.length; b++) rows.push([a, b]);
+  const cityOf = (i) => (FQ.terms.find((t) => t.id === S[i].terminal_id) || {}).city;
+  paint($('#fqFares'), html`<div class="tbl"><table><thead><tr><th>Tramo</th><th>Tarifa (USD)</th></tr></thead><tbody>${rows.map(([a, b]) => html`<tr><td>${cityOf(a)} → ${cityOf(b)}</td><td><input type="number" step="0.05" min="0.5" style="max-width:120px" data-change="fqFareSet" data-key="${a}-${b}" value="${FQ.cur.fares[a + '-' + b] ? (FQ.cur.fares[a + '-' + b] / 100).toFixed(2) : ''}" required></td></tr>`)}</tbody></table></div>`);
+}
+App.A.fqFareSet = (el) => { FQ.cur.fares[el.dataset.key] = Math.round(parseFloat(el.value) * 100); };
+App.A.fqCalc = () => {
+  const full = Math.round(parseFloat($('#fqFull').value) * 100); if (!(full > 0)) return toast('Ingresa la tarifa completa', 'err');
+  const S = FQ.cur.stops, total = S[S.length - 1].km || 1;
+  for (let a = 0; a < S.length - 1; a++) for (let b = a + 1; b < S.length; b++) FQ.cur.fares[a + '-' + b] = Math.max(50, Math.round(full * (S[b].km - S[a].km) / total / 5) * 5);
+  fqFares();
+};
+App.A.fqSave = async (f) => {
+  const o = formObj(f), c = FQ.cur, S = c.stops; S[S.length - 1].minutes = +o.duration_min;
+  const fares = Object.entries(c.fares).map(([k, v]) => { const [a, b] = k.split('-').map(Number); return { from_ord: a, to_ord: b, price_cents: v }; }).filter((x) => x.price_cents > 0);
+  const need = S.length * (S.length - 1) / 2; if (fares.length !== need) return toast(`Completa las ${need} tarifas de la matriz`, 'err');
+  const body = { depart_time: o.depart_time, duration_min: +o.duration_min, resolution_number: o.resolution_number, resolution_date: o.resolution_date || null, days: [0, 1, 2, 3, 4, 5, 6].map((i) => (o['d' + i] ? '1' : '0')).join(''), active: o.active ? 1 : 0, stops: S, fares };
+  await guard($('button', f), async () => { await api(c.id ? '/coop/frequencies/' + c.id : '/coop/frequencies', { method: c.id ? 'PUT' : 'POST', body }); closeModal(); toast('Frecuencia guardada', 'ok'); dispatch(); });
+};
+App.A.fqDel = async (el) => { if (!(await confirmBox('Eliminar frecuencia', 'Si tiene viajes, solo se desactivará.', 'Eliminar'))) return; try { const r = await api('/coop/frequencies/' + el.dataset.id, { method: 'DELETE' }); toast(r.deactivated ? 'Desactivada (tiene historial)' : 'Eliminada', 'ok'); dispatch(); } catch (e) { toast(e.message, 'err'); } };
