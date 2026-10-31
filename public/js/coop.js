@@ -185,3 +185,24 @@ App.A.fqSave = async (f) => {
   await guard($('button', f), async () => { await api(c.id ? '/coop/frequencies/' + c.id : '/coop/frequencies', { method: c.id ? 'PUT' : 'POST', body }); closeModal(); toast('Frecuencia guardada', 'ok'); dispatch(); });
 };
 App.A.fqDel = async (el) => { if (!(await confirmBox('Eliminar frecuencia', 'Si tiene viajes, solo se desactivará.', 'Eliminar'))) return; try { const r = await api('/coop/frequencies/' + el.dataset.id, { method: 'DELETE' }); toast(r.deactivated ? 'Desactivada (tiene historial)' : 'Eliminada', 'ok'); dispatch(); } catch (e) { toast(e.message, 'err'); } };
+
+/* ---------- Flota ---------- */
+route('/coop/buses', async (p, q) => {
+  const tab = q.tab || 'buses';
+  paint(view(), html`<h1>Flota</h1><div class="tabs"><a class="${tab === 'buses' ? 'on' : ''}" href="#/coop/buses?tab=buses">Buses</a><a class="${tab === 'groups' ? 'on' : ''}" href="#/coop/buses?tab=groups">Grupos para hoja de ruta</a></div><div id="crud_${tab}"></div>`);
+  if (tab === 'groups') return crudRender($('#crud_groups'), { key: 'groups', title: 'Grupos de buses', url: '/coop/bus-groups', single: 'grupo', newLabel: 'Nuevo grupo', cols: [['Nombre', (r) => html`<b>${r.name}</b>`], ['Descripción', (r) => r.description || '—'], ['Buses activos', (r) => r.buses]], fields: [{ name: 'name', label: 'Nombre', required: true }, { name: 'description', label: 'Descripción', full: true }] });
+  const spec = {
+    key: 'buses', title: '', url: '/coop/buses', single: 'bus', newLabel: 'Nuevo bus', wide: true,
+    load: async () => ({ groups: await api('/coop/bus-groups'), tpls: await api('/coop/seat-templates') }),
+    cols: [['N.º', (r) => html`<b>${r.number}</b>`], ['Placa', (r) => r.plate], ['Grupo', (r) => r.group_name || '—'], ['Chasis / carrocería', (r) => `${r.chassis_brand || ''} / ${r.body_brand || ''}`], ['Año', (r) => r.year || '—'], ['Asientos', (r) => `${r.capacity} · ${r.floors} piso(s)`], ['Rev. técnica', (r) => r.tech_review_expires || '—'], ['Estado', (r) => chip(r.status)]],
+    extra: (r) => html`<a class="btn sm" href="#/coop/buses/${r.id}/seats">💺 Asientos</a> `,
+    fields: (c) => [{ name: 'number', label: 'N.º de unidad', required: true }, { name: 'plate', label: 'Placa', required: true, ph: 'PBA-1234' }, { name: 'group_id', label: 'Grupo', type: 'select', num: true, empty: '— sin grupo —', options: c.groups.map((g) => [g.id, g.name]) },
+      { name: 'status', label: 'Estado', type: 'select', options: [['ACTIVO', 'Activo'], ['MANTENIMIENTO', 'Mantenimiento'], ['BAJA', 'De baja']] }, { name: 'chassis_brand', label: 'Marca de chasis' }, { name: 'body_brand', label: 'Marca de carrocería' }, { name: 'model', label: 'Modelo' }, { name: 'year', label: 'Año', type: 'number' }, { name: 'color', label: 'Color' },
+      { name: 'tech_review_expires', label: 'Vence revisión técnica', type: 'date' }, { name: 'registration_expires', label: 'Vence matrícula', type: 'date' }, { name: 'template_id', label: 'Plantilla de asientos (aplica al guardar)', type: 'select', num: true, empty: '— conservar actuales —', options: c.tpls.map((t) => [t.id, `${t.name} (${t.seats})`]) },
+      { name: 'amenities', label: 'Servicios (separados por coma)', full: true, ph: 'Aire acondicionado, WiFi, Baño' }],
+    transform: (b) => { b.amenities = String(b.amenities || '').split(',').map((x) => x.trim()).filter(Boolean); },
+  };
+  const orig = crudForm; void orig;
+  await crudRender($('#crud_buses'), spec);
+  spec.rows.forEach((r) => { r.amenities = (r.amenities || []).join(', '); });
+}, CO);
