@@ -4,6 +4,7 @@ process.env.DATA_DIR = require('fs').mkdtempSync(require('path').join(require('o
 const u = require('../server/lib/util');
 const { generateRotation, findConflicts } = require('../server/lib/rotation');
 const { priceTicket } = require('../server/lib/core');
+const { autoFares } = require('../server/routes/coop');
 
 test('cédula ecuatoriana: válida e inválida', () => {
   assert.equal(u.validCedula(u.makeCedula('171234567')), true);
@@ -32,4 +33,8 @@ test('rotación: más frecuencias que buses genera advertencia', () => {
 test('conflictos de descanso', () => {
   const c = findConflicts([{ date: 'd', bus_id: 1, frequency_id: 1 }, { date: 'd', bus_id: 1, frequency_id: 2 }], { 1: { depart_time: '07:00', duration_min: 240 }, 2: { depart_time: '11:30', duration_min: 60 } }, 60);
   assert.equal(c.length, 1);
+});
+test('tarifas proporcionales a km', () => {
+  const f = autoFares([{ km: 0 }, { km: 100 }, { km: 200 }], 1000);
+  assert.deepEqual(f.map(x => x.price_cents), [500, 1000, 500]);
 });
