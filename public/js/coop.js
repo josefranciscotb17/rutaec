@@ -232,3 +232,24 @@ App.A.beSeat = (el) => {
 App.A.beSave = (el) => guard(el, async () => { await api(`/coop/buses/${BE.id}/seats`, { method: 'PUT', body: { seats: BE.seats.map((s) => ({ f: s.f, r: s.r, c: s.c, label: s.label, seat_type_id: s.seat_type_id, sellable: s.sellable })) } }); toast('Asientos actualizados', 'ok'); });
 
 /* ---------- Plantillas de asientos ---------- */
+route('/coop/templates', async () => {
+  paint(view(), html`<h1>Plantillas de asientos</h1><p class="muted">Diseña la distribución una vez y aplícala a varios buses (1 o 2 pisos, pasillo, filas VIP).</p><div id="crud_tpl"></div>`);
+  await tplRender();
+}, CO);
+async function tplRender() {
+  const rows = await api('/coop/seat-templates');
+  paint($('#crud_tpl'), html`<div class="card"><div class="row spread mb"><h2 style="margin:0">Plantillas</h2>${canWrite() ? html`<button class="btn sm" data-act="tplNew">+ Nueva plantilla</button>` : ''}</div>${rows.length ? tbl(['Nombre', 'Pisos', 'Asientos', ''], rows.map((t) => html`<tr><td><b>${t.name}</b></td><td>${t.floors}</td><td>${t.seats}</td><td class="right nowrap"><button class="btn sm sec" data-act="tplView" data-id="${t.id}">Ver</button> ${canWrite() ? html`<button class="btn sm err" data-act="tplDel" data-id="${t.id}">✕</button>` : ''}</td></tr>`)) : empty('Sin plantillas.', '💺')}</div>`);
+  window.__tpls = rows;
+}
+const layoutSeats = (l) => l.map((s) => ({ id: s.f + '-' + s.label, label: s.label, floor: s.f, row: s.r, col: s.c, type: s.type, status: 'bloqueado', sellable: 1 }));
+App.A.tplView = (el) => { const t = window.__tpls.find((x) => String(x.id) === el.dataset.id); modal(t.name, html`<div class="center">${seatMapHtml(layoutSeats(t.layout).map((s) => ({ ...s, status: 'libre' })))}</div>`, { wide: true }); };
+App.A.tplDel = async (el) => { if (!(await confirmBox('Eliminar plantilla', 'Los buses ya creados conservan sus asientos.', 'Eliminar'))) return; try { await api('/coop/seat-templates/' + el.dataset.id, { method: 'DELETE' }); tplRender(); } catch (e) { toast(e.message, 'err'); } };
+App.A.tplNew = () => modal('Nueva plantilla', html`<form data-submit="tplGen"><div class="frm"><div class="full"><label>Nombre</label><input name="name" required placeholder="Doble piso 56"></div><div><label>Pisos</label><select name="floors"><option>1</option><option>2</option></select></div><div><label>Filas por piso</label><input type="number" name="rows" value="10" min="1" max="20"></div><div><label>Asientos por fila</label><select name="cols"><option>3</option><option selected>4</option><option>5</option></select></div><div><label>Asientos a la izquierda del pasillo</label><input type="number" name="aisle" value="2" min="1" max="4"></div><div><label>Filas VIP al frente (piso 1)</label><input type="number" name="vip_rows" value="2" min="0"></div></div><button class="btn mt">Generar vista previa</button></form><div id="tplPrev"></div>`, { wide: true });
+App.A.tplGen = async (f) => {
+  const o = formObj(f), r = await api('/coop/seat-templates/generate', { method: 'POST', body: { floors: +o.floors, rows: +o.rows, cols: +o.cols, aisle: +o.aisle, vip_rows: +o.vip_rows } });
+  window.__tplNew = { name: o.name, layout: r.layout };
+  paint($('#tplPrev'), html`<div class="center mt">${seatMapHtml(layoutSeats(r.layout).map((s) => ({ ...s, status: 'libre' })))}<p>${r.layout.length} asientos</p><button class="btn ok" data-act="tplSave">Guardar plantilla</button></div>`);
+};
+App.A.tplSave = (el) => guard(el, async () => { await api('/coop/seat-templates', { method: 'POST', body: { name: window.__tplNew.name, layout: window.__tplNew.layout } }); closeModal(); toast('Plantilla guardada', 'ok'); tplRender(); });
+
+/* ---------- Personal ---------- */
