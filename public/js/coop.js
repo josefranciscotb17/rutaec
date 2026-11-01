@@ -284,3 +284,18 @@ App.A.saveCoop = (f) => guard($('button', f), async () => { await api('/coop/pro
 App.A.uploadLogo = (el) => guard(el, async () => { const inp = $('#coopLogo') || $('#siteLogo'), fd = new FormData(); if (!inp.files[0]) return toast('Elige una imagen', 'err'); fd.append('file', inp.files[0]); await api(el.dataset.url, { method: 'POST', form: fd }); toast('Logo actualizado', 'ok'); dispatch(); });
 
 /* ---------- Reportes ---------- */
+route('/coop/reports', async (p, q) => {
+  const to = q.to || todayStr(), from = q.from || addD(to, -29), r = await api(`/coop/reports/sales?from=${from}&to=${to}`);
+  paint(view(), html`<div class="row spread"><h1>Reportes de ventas</h1><form class="row" data-submit="repRange"><input type="date" name="from" value="${from}" style="width:auto"><input type="date" name="to" value="${to}" style="width:auto"><button class="btn sm">Aplicar</button><a class="btn sm sec" href="${withToken(`/coop/reports/sales?from=${from}&to=${to}&format=csv` + (App.user.role === 'SUPERADMIN' || App.user.role === 'AUDITOR' ? '&coop_id=' + (localStorage.getItem('rutaec_coop') || '') : ''))}">⬇ CSV</a></form></div>
+    <div class="grid g4 mb"><div class="card kpi"><span>Ingresos</span><b>${money(r.totals.revenue)}</b></div><div class="card kpi"><span>Boletos</span><b>${r.totals.tickets}</b></div><div class="card kpi"><span>Descuentos otorgados</span><b>${money(r.totals.discounts)}</b></div><div class="card kpi"><span>Ocupación · No-show</span><b>${r.occupancy == null ? '—' : r.occupancy + '%'}</b><span>${r.no_show} no se presentaron</span></div></div>
+    <div class="grid g2"><div class="card"><h3>Por día</h3>${r.by_day.length ? bars(r.by_day.slice(-20), 'day', 'revenue') : empty('Sin datos')}</div><div class="card"><h3>Por ruta</h3>${r.by_route.length ? bars(r.by_route, 'route', 'revenue') : empty('Sin datos')}</div>
+    <div class="card"><h3>Por canal</h3>${bars(r.by_channel, 'channel', 'revenue')}<h3 class="mt">Por método de pago</h3>${bars(r.by_method, 'method', 'revenue')}</div><div class="card"><h3>Por oficina</h3>${bars(r.by_office, 'office', 'revenue')}<h3 class="mt">Por categoría de pasajero</h3>${bars(r.by_category, 'category', 'tickets', (x) => x)}</div></div>`);
+}, CO);
+App.A.repRange = (f) => { const o = formObj(f); go(`/coop/reports?from=${o.from}&to=${o.to}`); };
+
+/* ---------- Auditoría de la cooperativa ---------- */
+route('/coop/audit', async (p, q) => {
+  const tab = q.tab || 'audit', rows = await api(tab === 'audit' ? '/coop/audit' : '/coop/incidents');
+  paint(view(), html`<h1>Auditoría e incidencias</h1><div class="tabs"><a class="${tab === 'audit' ? 'on' : ''}" href="#/coop/audit?tab=audit">Bitácora de acciones</a><a class="${tab === 'inc' ? 'on' : ''}" href="#/coop/audit?tab=inc">Incidencias en ruta</a></div>
+    <div class="card">${rows.length ? (tab === 'audit' ? tbl(['Fecha', 'Usuario', 'Acción', 'Entidad', 'Detalle'], rows.map((a) => html`<tr><td class="nowrap">${a.created_at}</td><td>${a.user_email || '—'}</td><td><span class="chip">${a.action}</span></td><td>${a.entity || ''} ${a.entity_id || ''}</td><td class="small mono">${(a.after || '').slice(0, 90)}</td></tr>`)) : tbl(['Fecha', 'Viaje', 'Bus', 'Tipo', 'Detalle'], rows.map((i) => html`<tr><td class="nowrap">${i.created_at}</td><td>${i.date}</td><td>${i.bus_number}</td><td><span class="chip warn">${i.kind}</span></td><td>${i.detail || ''}</td></tr>`))) : empty('Sin registros.')}</div>`);
+}, CO);
