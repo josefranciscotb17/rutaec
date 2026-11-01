@@ -253,3 +253,18 @@ App.A.tplGen = async (f) => {
 App.A.tplSave = (el) => guard(el, async () => { await api('/coop/seat-templates', { method: 'POST', body: { name: window.__tplNew.name, layout: window.__tplNew.layout } }); closeModal(); toast('Plantilla guardada', 'ok'); tplRender(); });
 
 /* ---------- Personal ---------- */
+route('/coop/staff', async () => {
+  paint(view(), html`<h1>Personal</h1><div id="crud_staff"></div>`);
+  await crudRender($('#crud_staff'), {
+    key: 'staff', title: '', url: '/coop/users', single: 'usuario', newLabel: 'Nuevo usuario', wide: true,
+    load: async () => ({ offices: await api('/coop/offices') }),
+    cols: [['Nombre', (r) => html`<b>${r.nombres} ${r.apellidos}</b><div class="small muted">${r.email}</div>`], ['Rol', (r) => ROLE[r.role]], ['Oficina', (r) => r.office || '—'], ['Licencia', (r) => (r.role === 'DRIVER' ? `${r.license || '—'} (${r.license_expires || '—'})` : '—')], ['Anula boletos', (r) => (r.role === 'OFFICE' ? yesno(r.perm_void) : '—')], ['Activo', (r) => yesno(r.active)]],
+    extra: (r) => html`<button class="btn sm sec" data-act="resetPass" data-id="${r.id}">Clave</button> `,
+    fields: (c) => [{ name: 'nombres', label: 'Nombres', required: true }, { name: 'apellidos', label: 'Apellidos', required: true }, { name: 'email', label: 'Correo', type: 'email', required: true }, { name: 'cedula', label: 'Cédula', maxlength: 10 }, { name: 'phone', label: 'Celular' },
+      { name: 'role', label: 'Rol', type: 'select', options: [['OFFICE', 'Oficinista'], ['DRIVER', 'Chofer'], ['ASSISTANT', 'Ayudante'], ['COOP_ADMIN', 'Administrador']] }, { name: 'office_id', label: 'Oficina (oficinistas)', type: 'select', num: true, empty: '—', options: c.offices.map((o) => [o.id, o.name]) },
+      { name: 'license', label: 'N.º de licencia (choferes)' }, { name: 'license_expires', label: 'Vence licencia', type: 'date' }, { name: 'perm_void', label: 'Puede anular boletos', type: 'checkbox' }, { name: 'active', label: 'Activo', type: 'checkbox', def: 1 }],
+  });
+}, CO);
+App.A.resetPass = async (el) => { if (!(await confirmBox('Restablecer contraseña', 'Se generará una contraseña temporal nueva.', 'Restablecer'))) return; try { const r = await api(`/coop/users/${el.dataset.id}/reset-password`, { method: 'POST' }); modal('Contraseña temporal', html`<div class="alert ok mono" style="font-size:1.4rem;text-align:center">${r.temp_password}</div>`); } catch (e) { toast(e.message, 'err'); } };
+
+/* ---------- Configuración operativa ---------- */
