@@ -206,3 +206,29 @@ route('/coop/buses', async (p, q) => {
   await crudRender($('#crud_buses'), spec);
   spec.rows.forEach((r) => { r.amenities = (r.amenities || []).join(', '); });
 }, CO);
+route('/coop/buses/:id/seats', async (p) => {
+  const [seats, types, buses] = await Promise.all([api(`/coop/buses/${p.id}/seats`), api('/coop/seat-types'), api('/coop/buses')]);
+  const bus = buses.find((b) => String(b.id) === p.id);
+  BE = { id: p.id, seats: seats.map((s) => ({ ...s, f: s.floor, r: s.row, c: s.col })), types, tool: 'type', typeId: types[0].id };
+  paint(view(), html`<a href="#/coop/buses" class="small">◀ Flota</a><div class="row spread"><h1>Asientos del bus ${bus ? bus.number : ''}</h1>${canWrite() ? html`<button class="btn ok" data-act="beSave">Guardar cambios</button>` : ''}</div>
+    <div class="card"><p class="muted small">Elige una herramienta y toca los asientos del mapa. Los asientos con boletos vendidos no se eliminan: se marcan como no vendibles.</p>
+    <div class="row mb"><label><input type="radio" name="tool" value="type" checked data-change="beTool"> Asignar tipo:</label><select id="beType" data-change="beType" style="width:auto">${opts(types, types[0].id)}</select><label><input type="radio" name="tool" value="block" data-change="beTool"> Bloquear / habilitar</label><label><input type="radio" name="tool" value="label" data-change="beTool"> Cambiar número</label></div><div class="center" id="beMap"></div></div>`);
+  beDraw();
+}, CO);
+let BE = null;
+function beDraw() {
+  const floors = [...new Set(BE.seats.map((s) => s.f))].sort();
+  paint($('#beMap'), html`<div class="bus"><div class="wheel">🛞 Frente</div>${floors.map((f) => { const list = BE.seats.filter((s) => s.f === f), maxCol = Math.max(...list.map((s) => s.c)); return html`<div>${floors.length > 1 ? html`<div class="small muted center mb">Piso ${f}</div>` : ''}<div class="deck" style="grid-template-columns:repeat(${maxCol},46px)">${list.map((s) => { const ty = BE.types.find((t) => t.id === s.seat_type_id); return html`<button class="seat ${/vip/i.test(ty ? ty.name : '') ? 'vip' : ''} ${s.sellable ? '' : 'bloqueado'}" style="grid-row:${s.r};grid-column:${s.c};width:46px;height:46px" data-act="beSeat" data-l="${s.label}" title="${ty ? ty.name : ''}">${s.label}<div style="font-size:.55rem;font-weight:400">${ty ? ty.name.slice(0, 5) : ''}</div></button>`; })}</div></div>`; })}</div>`);
+}
+App.A.beTool = (el) => { BE.tool = el.value; };
+App.A.beType = (el) => { BE.typeId = +el.value; };
+App.A.beSeat = (el) => {
+  if (!canWrite()) return;
+  const s = BE.seats.find((x) => x.label === el.dataset.l);
+  if (BE.tool === 'type') s.seat_type_id = BE.typeId; else if (BE.tool === 'block') s.sellable = s.sellable ? 0 : 1;
+  else { const v = prompt('Nuevo número/etiqueta del asiento', s.label); if (v && !BE.seats.some((x) => x.label === v.trim())) s.label = v.trim(); }
+  beDraw();
+};
+App.A.beSave = (el) => guard(el, async () => { await api(`/coop/buses/${BE.id}/seats`, { method: 'PUT', body: { seats: BE.seats.map((s) => ({ f: s.f, r: s.r, c: s.c, label: s.label, seat_type_id: s.seat_type_id, sellable: s.sellable })) } }); toast('Asientos actualizados', 'ok'); });
+
+/* ---------- Plantillas de asientos ---------- */
