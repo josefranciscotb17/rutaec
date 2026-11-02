@@ -110,3 +110,32 @@ test('venta en oficina en efectivo exige caja abierta y cuadra el cierre', async
   const close = await api('POST', '/api/office/cash/close', { token: off, body: { counted_cents: 2000 + sale.data.total_cents } });
   assert.equal(close.status, 200, JSON.stringify(close.data));
 });
+
+test('cooperativa: crear frecuencia con tarifas, hoja de ruta con rotación y publicar', async () => {
+  const g = await login('gerente.sierraverde@rutaec.test');
+  const terms = (await api('GET', '/api/coop/terminals', { token: g })).data, tid = (n) => terms.find(t => t.city === n).id;
+  const f = await api('POST', '/api/coop/frequencies', { token: g, body: { depart_time: '18:00', duration_min: 180, stops: [{ terminal_id: tid('Cuenca'), km: 0 }, { terminal_id: tid('Machala'), km: 160 }], auto_fare_cents: 600 } });
+  assert.equal(f.status, 201, JSON.stringify(f.data)); assert.equal(f.data.fares.length, 1); assert.equal(f.data.fares[0].price_cents, 600);
+  const group = (await api('GET', '/api/coop/bus-groups', { token: g })).data[0];
+  const start = util.addDays(util.today(), 20), end = util.addDays(util.today(), 23);
+  const pv = await api('POST', '/api/coop/route-sheets/preview', { token: g, body: { group_id: group.id, start_date: start, end_date: end } });
+  assert.equal(pv.status, 200); assert.ok(pv.data.warnings.length >= 1, 'hay 6 frecuencias para 5 buses');
+  const per = new Set(); pv.data.entries.filter(e => e.date === start).forEach(e => { assert.ok(!per.has(e.bus_id), 'un bus no repite posición el mismo día'); per.add(e.bus_id); });
+  const sv = await api('POST', '/api/coop/route-sheets', { token: g, body: { group_id: group.id, start_date: start, end_date: end, entries: pv.data.entries } });
+  assert.equal(sv.status, 201);
+  const pub = await api('POST', `/api/coop/route-sheets/${sv.data.id}/publish`, { token: g, body: { force: true } });
+  assert.equal(pub.status, 200, JSON.stringify(pub.data)); assert.ok(pub.data.created > 0);
+});
+
+test('reportes y administración', async () => {
+  const g = await login('gerente.andina@rutaec.test');
+  const r = await api('GET', '/api/coop/reports/sales', { token: g }); assert.equal(r.status, 200); assert.ok(r.data.totals.tickets > 0);
+  const csv = await api('GET', '/api/coop/reports/sales?format=csv', { token: g }); assert.match(csv.data, /fecha;boletos/);
+  const sa = await login('admin@rutaec.test');
+  assert.equal((await api('GET', '/api/admin/stats', { token: sa })).status, 200);
+  const bad = await api('PUT', '/api/admin/settings', { token: sa, body: { primary_color: 'rojo' } }); assert.equal(bad.status, 400);
+  assert.equal((await api('PUT', '/api/admin/settings', { token: sa, body: { site_name: 'RutaEC', reserve_minutes: 5 } })).status, 200);
+  const aud = await login('auditor@rutaec.test');
+  assert.equal((await api('GET', '/api/admin/audit', { token: aud })).status, 200);
+  assert.equal((await api('PUT', '/api/admin/settings', { token: aud, body: { reserve_minutes: 9 } })).status, 403);
+});
