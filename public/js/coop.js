@@ -206,3 +206,96 @@ route('/coop/buses', async (p, q) => {
   await crudRender($('#crud_buses'), spec);
   spec.rows.forEach((r) => { r.amenities = (r.amenities || []).join(', '); });
 }, CO);
+route('/coop/buses/:id/seats', async (p) => {
+  const [seats, types, buses] = await Promise.all([api(`/coop/buses/${p.id}/seats`), api('/coop/seat-types'), api('/coop/buses')]);
+  const bus = buses.find((b) => String(b.id) === p.id);
+  BE = { id: p.id, seats: seats.map((s) => ({ ...s, f: s.floor, r: s.row, c: s.col })), types, tool: 'type', typeId: types[0].id };
+  paint(view(), html`<a href="#/coop/buses" class="small">◀ Flota</a><div class="row spread"><h1>Asientos del bus ${bus ? bus.number : ''}</h1>${canWrite() ? html`<button class="btn ok" data-act="beSave">Guardar cambios</button>` : ''}</div>
+    <div class="card"><p class="muted small">Elige una herramienta y toca los asientos del mapa. Los asientos con boletos vendidos no se eliminan: se marcan como no vendibles.</p>
+    <div class="row mb"><label><input type="radio" name="tool" value="type" checked data-change="beTool"> Asignar tipo:</label><select id="beType" data-change="beType" style="width:auto">${opts(types, types[0].id)}</select><label><input type="radio" name="tool" value="block" data-change="beTool"> Bloquear / habilitar</label><label><input type="radio" name="tool" value="label" data-change="beTool"> Cambiar número</label></div><div class="center" id="beMap"></div></div>`);
+  beDraw();
+}, CO);
+let BE = null;
+function beDraw() {
+  const floors = [...new Set(BE.seats.map((s) => s.f))].sort();
+  paint($('#beMap'), html`<div class="bus"><div class="wheel">🛞 Frente</div>${floors.map((f) => { const list = BE.seats.filter((s) => s.f === f), maxCol = Math.max(...list.map((s) => s.c)); return html`<div>${floors.length > 1 ? html`<div class="small muted center mb">Piso ${f}</div>` : ''}<div class="deck" style="grid-template-columns:repeat(${maxCol},46px)">${list.map((s) => { const ty = BE.types.find((t) => t.id === s.seat_type_id); return html`<button class="seat ${/vip/i.test(ty ? ty.name : '') ? 'vip' : ''} ${s.sellable ? '' : 'bloqueado'}" style="grid-row:${s.r};grid-column:${s.c};width:46px;height:46px" data-act="beSeat" data-l="${s.label}" title="${ty ? ty.name : ''}">${s.label}<div style="font-size:.55rem;font-weight:400">${ty ? ty.name.slice(0, 5) : ''}</div></button>`; })}</div></div>`; })}</div>`);
+}
+App.A.beTool = (el) => { BE.tool = el.value; };
+App.A.beType = (el) => { BE.typeId = +el.value; };
+App.A.beSeat = (el) => {
+  if (!canWrite()) return;
+  const s = BE.seats.find((x) => x.label === el.dataset.l);
+  if (BE.tool === 'type') s.seat_type_id = BE.typeId; else if (BE.tool === 'block') s.sellable = s.sellable ? 0 : 1;
+  else { const v = prompt('Nuevo número/etiqueta del asiento', s.label); if (v && !BE.seats.some((x) => x.label === v.trim())) s.label = v.trim(); }
+  beDraw();
+};
+App.A.beSave = (el) => guard(el, async () => { await api(`/coop/buses/${BE.id}/seats`, { method: 'PUT', body: { seats: BE.seats.map((s) => ({ f: s.f, r: s.r, c: s.c, label: s.label, seat_type_id: s.seat_type_id, sellable: s.sellable })) } }); toast('Asientos actualizados', 'ok'); });
+
+/* ---------- Plantillas de asientos ---------- */
+route('/coop/templates', async () => {
+  paint(view(), html`<h1>Plantillas de asientos</h1><p class="muted">Diseña la distribución una vez y aplícala a varios buses (1 o 2 pisos, pasillo, filas VIP).</p><div id="crud_tpl"></div>`);
+  await tplRender();
+}, CO);
+async function tplRender() {
+  const rows = await api('/coop/seat-templates');
+  paint($('#crud_tpl'), html`<div class="card"><div class="row spread mb"><h2 style="margin:0">Plantillas</h2>${canWrite() ? html`<button class="btn sm" data-act="tplNew">+ Nueva plantilla</button>` : ''}</div>${rows.length ? tbl(['Nombre', 'Pisos', 'Asientos', ''], rows.map((t) => html`<tr><td><b>${t.name}</b></td><td>${t.floors}</td><td>${t.seats}</td><td class="right nowrap"><button class="btn sm sec" data-act="tplView" data-id="${t.id}">Ver</button> ${canWrite() ? html`<button class="btn sm err" data-act="tplDel" data-id="${t.id}">✕</button>` : ''}</td></tr>`)) : empty('Sin plantillas.', '💺')}</div>`);
+  window.__tpls = rows;
+}
+const layoutSeats = (l) => l.map((s) => ({ id: s.f + '-' + s.label, label: s.label, floor: s.f, row: s.r, col: s.c, type: s.type, status: 'bloqueado', sellable: 1 }));
+App.A.tplView = (el) => { const t = window.__tpls.find((x) => String(x.id) === el.dataset.id); modal(t.name, html`<div class="center">${seatMapHtml(layoutSeats(t.layout).map((s) => ({ ...s, status: 'libre' })))}</div>`, { wide: true }); };
+App.A.tplDel = async (el) => { if (!(await confirmBox('Eliminar plantilla', 'Los buses ya creados conservan sus asientos.', 'Eliminar'))) return; try { await api('/coop/seat-templates/' + el.dataset.id, { method: 'DELETE' }); tplRender(); } catch (e) { toast(e.message, 'err'); } };
+App.A.tplNew = () => modal('Nueva plantilla', html`<form data-submit="tplGen"><div class="frm"><div class="full"><label>Nombre</label><input name="name" required placeholder="Doble piso 56"></div><div><label>Pisos</label><select name="floors"><option>1</option><option>2</option></select></div><div><label>Filas por piso</label><input type="number" name="rows" value="10" min="1" max="20"></div><div><label>Asientos por fila</label><select name="cols"><option>3</option><option selected>4</option><option>5</option></select></div><div><label>Asientos a la izquierda del pasillo</label><input type="number" name="aisle" value="2" min="1" max="4"></div><div><label>Filas VIP al frente (piso 1)</label><input type="number" name="vip_rows" value="2" min="0"></div></div><button class="btn mt">Generar vista previa</button></form><div id="tplPrev"></div>`, { wide: true });
+App.A.tplGen = async (f) => {
+  const o = formObj(f), r = await api('/coop/seat-templates/generate', { method: 'POST', body: { floors: +o.floors, rows: +o.rows, cols: +o.cols, aisle: +o.aisle, vip_rows: +o.vip_rows } });
+  window.__tplNew = { name: o.name, layout: r.layout };
+  paint($('#tplPrev'), html`<div class="center mt">${seatMapHtml(layoutSeats(r.layout).map((s) => ({ ...s, status: 'libre' })))}<p>${r.layout.length} asientos</p><button class="btn ok" data-act="tplSave">Guardar plantilla</button></div>`);
+};
+App.A.tplSave = (el) => guard(el, async () => { await api('/coop/seat-templates', { method: 'POST', body: { name: window.__tplNew.name, layout: window.__tplNew.layout } }); closeModal(); toast('Plantilla guardada', 'ok'); tplRender(); });
+
+/* ---------- Personal ---------- */
+route('/coop/staff', async () => {
+  paint(view(), html`<h1>Personal</h1><div id="crud_staff"></div>`);
+  await crudRender($('#crud_staff'), {
+    key: 'staff', title: '', url: '/coop/users', single: 'usuario', newLabel: 'Nuevo usuario', wide: true,
+    load: async () => ({ offices: await api('/coop/offices') }),
+    cols: [['Nombre', (r) => html`<b>${r.nombres} ${r.apellidos}</b><div class="small muted">${r.email}</div>`], ['Rol', (r) => ROLE[r.role]], ['Oficina', (r) => r.office || '—'], ['Licencia', (r) => (r.role === 'DRIVER' ? `${r.license || '—'} (${r.license_expires || '—'})` : '—')], ['Anula boletos', (r) => (r.role === 'OFFICE' ? yesno(r.perm_void) : '—')], ['Activo', (r) => yesno(r.active)]],
+    extra: (r) => html`<button class="btn sm sec" data-act="resetPass" data-id="${r.id}">Clave</button> `,
+    fields: (c) => [{ name: 'nombres', label: 'Nombres', required: true }, { name: 'apellidos', label: 'Apellidos', required: true }, { name: 'email', label: 'Correo', type: 'email', required: true }, { name: 'cedula', label: 'Cédula', maxlength: 10 }, { name: 'phone', label: 'Celular' },
+      { name: 'role', label: 'Rol', type: 'select', options: [['OFFICE', 'Oficinista'], ['DRIVER', 'Chofer'], ['ASSISTANT', 'Ayudante'], ['COOP_ADMIN', 'Administrador']] }, { name: 'office_id', label: 'Oficina (oficinistas)', type: 'select', num: true, empty: '—', options: c.offices.map((o) => [o.id, o.name]) },
+      { name: 'license', label: 'N.º de licencia (choferes)' }, { name: 'license_expires', label: 'Vence licencia', type: 'date' }, { name: 'perm_void', label: 'Puede anular boletos', type: 'checkbox' }, { name: 'active', label: 'Activo', type: 'checkbox', def: 1 }],
+  });
+}, CO);
+App.A.resetPass = async (el) => { if (!(await confirmBox('Restablecer contraseña', 'Se generará una contraseña temporal nueva.', 'Restablecer'))) return; try { const r = await api(`/coop/users/${el.dataset.id}/reset-password`, { method: 'POST' }); modal('Contraseña temporal', html`<div class="alert ok mono" style="font-size:1.4rem;text-align:center">${r.temp_password}</div>`); } catch (e) { toast(e.message, 'err'); } };
+
+/* ---------- Configuración operativa ---------- */
+route('/coop/setup', async (p, q) => {
+  const tab = q.tab || 'offices';
+  paint(view(), html`<h1>Oficinas, bancos y temporadas</h1><div class="tabs">${[['offices', 'Oficinas e impresoras'], ['banks', 'Cuentas bancarias'], ['types', 'Tipos de asiento'], ['seasons', 'Temporadas'], ['profile', 'Perfil y logo']].map(([k, l]) => html`<a class="${tab === k ? 'on' : ''}" href="#/coop/setup?tab=${k}">${l}</a>`)}</div><div id="crud_${tab}"></div>`);
+  const box = $('#crud_' + tab);
+  if (tab === 'offices') return crudRender(box, { key: 'offices', title: 'Oficinas', url: '/coop/offices', single: 'oficina', newLabel: 'Nueva oficina', load: async () => ({ terms: await api('/coop/terminals') }), cols: [['Nombre', (r) => html`<b>${r.name}</b>`], ['Terminal', (r, c) => (c.terms.find((t) => t.id === r.terminal_id) || {}).name || '—'], ['Impresora térmica', (r) => r.printer_width + ' mm'], ['Impresión automática', (r) => yesno(r.auto_print)]], fields: (c) => [{ name: 'name', label: 'Nombre', required: true }, { name: 'terminal_id', label: 'Terminal', type: 'select', num: true, empty: '—', options: c.terms.map((t) => [t.id, `${t.city} · ${t.name}`]) }, { name: 'printer_width', label: 'Ancho de papel', type: 'select', num: true, options: [[80, '80 mm'], [58, '58 mm']] }, { name: 'auto_print', label: 'Abrir impresión al emitir', type: 'checkbox', def: 1 }] });
+  if (tab === 'banks') return crudRender(box, { key: 'banks', title: 'Cuentas bancarias para transferencias', url: '/coop/bank-accounts', single: 'cuenta', newLabel: 'Nueva cuenta', cols: [['Banco', (r) => html`<b>${r.bank}</b>`], ['Tipo', (r) => r.type], ['Número', (r) => html`<span class="mono">${r.number}</span>`], ['Titular', (r) => r.holder], ['RUC / CI', (r) => r.holder_id || '—'], ['Activa', (r) => yesno(r.active)]], fields: [{ name: 'bank', label: 'Banco', required: true }, { name: 'type', label: 'Tipo', type: 'select', options: [['Ahorros', 'Ahorros'], ['Corriente', 'Corriente']] }, { name: 'number', label: 'N.º de cuenta', required: true }, { name: 'holder', label: 'Titular', required: true }, { name: 'holder_id', label: 'RUC / CI del titular' }, { name: 'active', label: 'Activa', type: 'checkbox', def: 1 }] });
+  if (tab === 'types') return crudRender(box, { key: 'types', title: 'Tipos de asiento y recargo', url: '/coop/seat-types', single: 'tipo', newLabel: 'Nuevo tipo', cols: [['Nombre', (r) => html`<b>${r.name}</b>`], ['Factor sobre la tarifa', (r) => r.factor_pct + '%'], ['Descripción', (r) => r.description || '—']], fields: [{ name: 'name', label: 'Nombre', required: true }, { name: 'factor_pct', label: 'Factor (% de la tarifa base)', type: 'number', def: 100, min: 10, max: 500 }, { name: 'description', label: 'Descripción', full: true }] });
+  if (tab === 'seasons') return crudRender(box, { key: 'seasons', title: 'Temporadas (recargo por feriados / vacaciones)', url: '/coop/seasons', single: 'temporada', newLabel: 'Nueva temporada', cols: [['Nombre', (r) => html`<b>${r.name}</b>`], ['Desde', (r) => fdate(r.start_date)], ['Hasta', (r) => fdate(r.end_date)], ['Ajuste', (r) => (r.pct > 0 ? '+' : '') + r.pct + '%'], ['Activa', (r) => yesno(r.active)]], fields: [{ name: 'name', label: 'Nombre', required: true }, { name: 'pct', label: 'Ajuste %', type: 'number', def: 10 }, { name: 'start_date', label: 'Desde', type: 'date', required: true }, { name: 'end_date', label: 'Hasta', type: 'date', required: true }, { name: 'active', label: 'Activa', type: 'checkbox', def: 1 }] });
+  const pr = await api('/coop/profile');
+  paint(box, html`<div class="card"><form data-submit="saveCoop"><div class="frm"><div class="full"><label>Razón social</label><input name="name" value="${pr.name}" required></div><div><label>Nombre corto</label><input name="short_name" value="${pr.short_name || ''}"></div><div><label>RUC</label><input name="ruc" value="${pr.ruc || ''}" maxlength="13"></div><div><label>Teléfono</label><input name="phone" value="${pr.phone || ''}"></div><div><label>Correo</label><input type="email" name="email" value="${pr.email || ''}"></div><div class="full"><label>Dirección</label><input name="address" value="${pr.address || ''}"></div><div><label>Color de marca</label><input type="color" name="color" value="${pr.color}"></div></div>${canWrite() ? html`<button class="btn mt">Guardar</button>` : ''}</form>
+    ${canWrite() ? html`<hr style="border:0;border-top:1px solid var(--line);margin:18px 0"><h3>Logo</h3>${pr.logo ? html`<img src="${pr.logo}" style="height:60px">` : ''}<div class="row"><input type="file" id="coopLogo" accept="image/png,image/jpeg,image/webp" style="max-width:320px"><button class="btn sec" data-act="uploadLogo" data-url="/coop/logo">Subir logo</button></div>` : ''}</div>`);
+}, CO);
+App.A.saveCoop = (f) => guard($('button', f), async () => { await api('/coop/profile', { method: 'PUT', body: formObj(f) }); toast('Perfil actualizado', 'ok'); });
+App.A.uploadLogo = (el) => guard(el, async () => { const inp = $('#coopLogo') || $('#siteLogo'), fd = new FormData(); if (!inp.files[0]) return toast('Elige una imagen', 'err'); fd.append('file', inp.files[0]); await api(el.dataset.url, { method: 'POST', form: fd }); toast('Logo actualizado', 'ok'); dispatch(); });
+
+/* ---------- Reportes ---------- */
+route('/coop/reports', async (p, q) => {
+  const to = q.to || todayStr(), from = q.from || addD(to, -29), r = await api(`/coop/reports/sales?from=${from}&to=${to}`);
+  paint(view(), html`<div class="row spread"><h1>Reportes de ventas</h1><form class="row" data-submit="repRange"><input type="date" name="from" value="${from}" style="width:auto"><input type="date" name="to" value="${to}" style="width:auto"><button class="btn sm">Aplicar</button><a class="btn sm sec" href="${withToken(`/coop/reports/sales?from=${from}&to=${to}&format=csv` + (App.user.role === 'SUPERADMIN' || App.user.role === 'AUDITOR' ? '&coop_id=' + (localStorage.getItem('rutaec_coop') || '') : ''))}">⬇ CSV</a></form></div>
+    <div class="grid g4 mb"><div class="card kpi"><span>Ingresos</span><b>${money(r.totals.revenue)}</b></div><div class="card kpi"><span>Boletos</span><b>${r.totals.tickets}</b></div><div class="card kpi"><span>Descuentos otorgados</span><b>${money(r.totals.discounts)}</b></div><div class="card kpi"><span>Ocupación · No-show</span><b>${r.occupancy == null ? '—' : r.occupancy + '%'}</b><span>${r.no_show} no se presentaron</span></div></div>
+    <div class="grid g2"><div class="card"><h3>Por día</h3>${r.by_day.length ? bars(r.by_day.slice(-20), 'day', 'revenue') : empty('Sin datos')}</div><div class="card"><h3>Por ruta</h3>${r.by_route.length ? bars(r.by_route, 'route', 'revenue') : empty('Sin datos')}</div>
+    <div class="card"><h3>Por canal</h3>${bars(r.by_channel, 'channel', 'revenue')}<h3 class="mt">Por método de pago</h3>${bars(r.by_method, 'method', 'revenue')}</div><div class="card"><h3>Por oficina</h3>${bars(r.by_office, 'office', 'revenue')}<h3 class="mt">Por categoría de pasajero</h3>${bars(r.by_category, 'category', 'tickets', (x) => x)}</div></div>`);
+}, CO);
+App.A.repRange = (f) => { const o = formObj(f); go(`/coop/reports?from=${o.from}&to=${o.to}`); };
+
+/* ---------- Auditoría de la cooperativa ---------- */
+route('/coop/audit', async (p, q) => {
+  const tab = q.tab || 'audit', rows = await api(tab === 'audit' ? '/coop/audit' : '/coop/incidents');
+  paint(view(), html`<h1>Auditoría e incidencias</h1><div class="tabs"><a class="${tab === 'audit' ? 'on' : ''}" href="#/coop/audit?tab=audit">Bitácora de acciones</a><a class="${tab === 'inc' ? 'on' : ''}" href="#/coop/audit?tab=inc">Incidencias en ruta</a></div>
+    <div class="card">${rows.length ? (tab === 'audit' ? tbl(['Fecha', 'Usuario', 'Acción', 'Entidad', 'Detalle'], rows.map((a) => html`<tr><td class="nowrap">${a.created_at}</td><td>${a.user_email || '—'}</td><td><span class="chip">${a.action}</span></td><td>${a.entity || ''} ${a.entity_id || ''}</td><td class="small mono">${(a.after || '').slice(0, 90)}</td></tr>`)) : tbl(['Fecha', 'Viaje', 'Bus', 'Tipo', 'Detalle'], rows.map((i) => html`<tr><td class="nowrap">${i.created_at}</td><td>${i.date}</td><td>${i.bus_number}</td><td><span class="chip warn">${i.kind}</span></td><td>${i.detail || ''}</td></tr>`))) : empty('Sin registros.')}</div>`);
+}, CO);
