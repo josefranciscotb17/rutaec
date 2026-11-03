@@ -1,0 +1,30 @@
+name: 🐞 Reportar un error
+description: Algo no funciona como debería
+title: "[BUG] "
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes: { value: "Gracias por reportar. **No incluyas cédulas reales ni datos de pago.** Para vulnerabilidades usa SECURITY.md." }
+  - type: input
+    id: jira
+    attributes: { label: Historia relacionada (si existe), placeholder: HU-12 }
+  - type: dropdown
+    id: rol
+    attributes:
+      label: Rol afectado
+      options: [Cliente, Oficinista, Chofer / Ayudante, Admin de cooperativa, Superadmin / Auditor, Público]
+    validations: { required: true }
+  - type: textarea
+    id: pasos
+    attributes: { label: Pasos para reproducir, placeholder: "1. Ir a...\n2. Hacer clic en...\n3. Ver error" }
+    validations: { required: true }
+  - type: textarea
+    id: esperado
+    attributes: { label: Resultado esperado vs. obtenido }
+    validations: { required: true }
+  - type: input
+    id: entorno
+    attributes: { label: Entorno, placeholder: "Windows 11 · Chrome 130 · Node 22 · rama develop" }
+  - type: textarea
+    id: logs
+    attributes: { label: Capturas o registros, description: Arrastra imágenes o pega el error de consola/servidor }

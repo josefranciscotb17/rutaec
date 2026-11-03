@@ -1,0 +1,26 @@
+name: ✨ Proponer una mejora / historia de usuario
+description: Idea o requerimiento nuevo
+title: "[FEAT] "
+labels: [enhancement]
+body:
+  - type: input
+    id: jira
+    attributes: { label: Código de la historia (HU-n), placeholder: HU-20 }
+  - type: textarea
+    id: historia
+    attributes:
+      label: Historia de usuario
+      value: "Como <rol>, quiero <acción>, para <beneficio>."
+    validations: { required: true }
+  - type: textarea
+    id: criterios
+    attributes:
+      label: Criterios de aceptación
+      value: "- [ ] Dado..., cuando..., entonces...\n- [ ] "
+    validations: { required: true }
+  - type: dropdown
+    id: prioridad
+    attributes: { label: Prioridad, options: [Alta, Media, Baja] }
+  - type: textarea
+    id: notas
+    attributes: { label: Notas (reglas ANT/SRI, mockups, dependencias) }
