@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "Si usas este software en un trabajo académico, cítalo con estos datos."
 title: "RutaEC: plataforma web de venta y control de boletos de transporte interprovincial en Ecuador"
 type: software
-version: 0.5.0
+version: 0.5.1
 date-released: 2026-11-02
 license: MIT
 authors:
