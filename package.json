@@ -1,6 +1,6 @@
 {
   "name": "rutaec",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "RutaEC - Plataforma web para la gestión y venta de pasajes de transporte interprovincial en Ecuador",
   "main": "server/index.js",
   "license": "MIT",
