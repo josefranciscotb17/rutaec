@@ -2,6 +2,9 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y versionado semántico.
 
+## [0.5.1] - 2026-11-03 — Corrección (hotfix HU-30)
+### Corregido- La fecha de lanzamiento (`date-released`) de `CITATION.cff` ahora es la del release v0.5.0.- La versión citada y la declarada en el proyecto pasan a 0.5.1.
+
 ## [0.5.0] - 2026-11-02 — Primera presentación
 
 ### Añadido
