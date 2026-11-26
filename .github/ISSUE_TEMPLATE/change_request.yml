@@ -1,0 +1,65 @@
+name: 🛠️ Solicitud de cambio (control de cambios)
+description: Cambio que debe aprobar el comité según GOVERNANCE.md
+title: "[CAMBIO] [HU-n] "
+labels: [solicitud-de-cambio, pendiente-comite]
+body:
+  - type: markdown
+    attributes:
+      value: "Completa todos los campos. El comité revisa el impacto y, si aprueba, pone la etiqueta **cambio-aprobado**. Proceso completo en GOVERNANCE.md (raíz del repositorio)."
+  - type: dropdown
+    id: tipo
+    attributes:
+      label: Tipo de cambio (ITIL)
+      options: [Normal, Estándar, Emergencia]
+    validations: { required: true }
+  - type: input
+    id: hu
+    attributes: { label: Código de la historia, placeholder: HU-36 }
+    validations: { required: true }
+  - type: textarea
+    id: descripcion
+    attributes:
+      label: Descripción del cambio
+      value: "Como <rol>, quiero <acción>, para <beneficio>."
+    validations: { required: true }
+  - type: textarea
+    id: justificacion
+    attributes: { label: Justificación (requisito, falla o riesgo que resuelve) }
+    validations: { required: true }
+  - type: checkboxes
+    id: modulos
+    attributes:
+      label: Módulos afectados
+      options:
+        - label: "Base de datos (server/migrations/)"
+        - label: "Autenticación y permisos (server/lib/auth.js)"
+        - label: "Administración (server/routes/admin.js, public/js/admin.js)"
+        - label: "Cooperativa (server/routes/coop.js, public/js/coop.js)"
+        - label: "Ventas y ventanilla (server/routes/sales.js, public/js/office.js)"
+        - label: "Chofer (server/routes/driver.js, public/js/driver.js)"
+        - label: "Búsqueda y compra (server/routes/public.js, public/js/shop.js)"
+        - label: "Motor de precios (server/lib/core.js)"
+        - label: "Repositorio y documentación (.github/, docs/)"
+  - type: textarea
+    id: impacto
+    attributes:
+      label: Análisis de impacto
+      description: Tablas y columnas que cambian, archivos que las leen o escriben, usuarios afectados.
+    validations: { required: true }
+  - type: dropdown
+    id: riesgo
+    attributes: { label: Riesgo, options: [Bajo, Medio, Alto] }
+    validations: { required: true }
+  - type: textarea
+    id: pruebas
+    attributes: { label: Plan de pruebas, value: "- [ ] npm test en verde\n- [ ] " }
+    validations: { required: true }
+  - type: textarea
+    id: reversion
+    attributes:
+      label: Plan de reversión
+      value: "- Código: git revert -m 1 <fusión>\n- Datos: npm run db:restore -- data/backups/<respaldo>.db"
+    validations: { required: true }
+  - type: input
+    id: fecha
+    attributes: { label: Fecha objetivo, placeholder: 2026-11-23 }
