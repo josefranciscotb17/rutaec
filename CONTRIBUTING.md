@@ -14,6 +14,8 @@ npm test             # 17+ pruebas automáticas deben pasar
 
 Requisitos: **Node.js 22.13+**, Git. No hace falta instalar ninguna base de datos (SQLite incluido).
 
+> Todo cambio sigue el proceso de control de cambios de [`GOVERNANCE.md`](GOVERNANCE.md): solicitud con la plantilla *Solicitud de cambio*, aprobación del comité y PR enlazado.
+
 ## 2. Ramas (Gitflow simplificado)
 
 | Rama | Uso | Se crea desde | Se integra en |
