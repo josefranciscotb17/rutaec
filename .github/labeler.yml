@@ -1,0 +1,12 @@
+# Etiquetas automáticas de control de cambios (actions/labeler v5). Ver GOVERNANCE.md.
+emergencia:
+  - head-branch: ['^hotfix/']
+normal:
+  - head-branch: ['^feature/']
+estandar:
+  - head-branch: ['^docs/', '^chore/']
+release:
+  - head-branch: ['^release/']
+esquema:
+  - changed-files:
+      - any-glob-to-any-file: ['server/migrations/**', 'server/schema.sql']
