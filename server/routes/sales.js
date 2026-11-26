@@ -13,9 +13,9 @@ const { nowLocal, addMinutes, diffMinutes, httpError, money } = require('../lib/
 const PRIV = path.join(UPLOADS, 'private');
 const upload = multer({ dest: PRIV, limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
 const base = (req) => process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
-const isStaff = (u) => ['SUPERADMIN', 'AUDITOR', 'COOP_ADMIN', 'OFFICE'].includes(u.role);
+const isStaff = (u) => ['AUDITOR', 'COOP_ADMIN', 'OFFICE'].includes(u.role);
 
-function canSeeOrder(u, o) { return o.buyer_id === u.id || ['SUPERADMIN', 'AUDITOR'].includes(u.role) || (['COOP_ADMIN', 'OFFICE'].includes(u.role) && u.coop_id === o.coop_id); }
+function canSeeOrder(u, o) { return o.buyer_id === u.id || u.role === 'AUDITOR' || (['COOP_ADMIN', 'OFFICE'].includes(u.role) && u.coop_id === o.coop_id); }
 function loadOrder(req, id) {
   core.expireOrders();
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(+id);
@@ -127,7 +127,7 @@ function ticketAccess(req, id) {
   const t = core.ticketFull(+id);
   if (!t) throw httpError(404, 'Boleto no encontrado');
   const u = req.user;
-  if (!(t.buyer_id === u.id || ['SUPERADMIN', 'AUDITOR'].includes(u.role) || (['COOP_ADMIN', 'OFFICE'].includes(u.role) && u.coop_id === t.coop_id))) throw httpError(403, 'No tienes acceso a este boleto');
+  if (!(t.buyer_id === u.id || u.role === 'AUDITOR' || (['COOP_ADMIN', 'OFFICE'].includes(u.role) && u.coop_id === t.coop_id))) throw httpError(403, 'No tienes acceso a este boleto');
   return t;
 }
 function publicTicket(t) {
@@ -364,7 +364,7 @@ router.get('/office/dashboard', ...office, (req, res) => {
 /* Manifiesto de pasajeros (HTML A4 imprimible) */
 router.get('/manifest/:tripId', requireAuth, requireRole('OFFICE', 'COOP_ADMIN', 'DRIVER', 'ASSISTANT'), (req, res) => {
   const t = core.getTrip(+req.params.tripId);
-  if (!t || (req.user.role !== 'SUPERADMIN' && t.coop_id !== req.user.coop_id)) throw httpError(404, 'Viaje no encontrado');
+  if (!t || t.coop_id !== req.user.coop_id) throw httpError(404, 'Viaje no encontrado');
   const rows = db.prepare(`SELECT tk.*, p.cedula, p.nombres, p.apellidos, s.label FROM tickets tk JOIN passengers p ON p.id=tk.passenger_id JOIN bus_seats s ON s.id=tk.seat_id WHERE tk.trip_id=? AND tk.status IN ('VALIDO','ABORDADO','BAJO') ORDER BY CAST(s.label AS INTEGER), s.label`).all(t.id);
   const drv = t.driver_id ? db.prepare('SELECT nombres,apellidos FROM users WHERE id=?').get(t.driver_id) : null;
   const body = `<h1>Manifiesto de pasajeros</h1><p><b>${docs.esc(t.coop_name)}</b> · ${docs.esc(t.stops[0].city)} - ${docs.esc(t.stops[t.stops.length - 1].city)} · ${t.depart_at.slice(0, 16)} · Bus ${docs.esc(t.bus_number)} (${docs.esc(t.plate)})</p><p class="m">Chofer: ${drv ? docs.esc(drv.nombres + ' ' + drv.apellidos) : '-'} · Pasajeros: ${rows.length}</p>
