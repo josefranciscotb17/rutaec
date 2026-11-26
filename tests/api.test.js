@@ -139,3 +139,14 @@ test('reportes y administración', async () => {
   assert.equal((await api('GET', '/api/admin/audit', { token: aud })).status, 200);
   assert.equal((await api('PUT', '/api/admin/settings', { token: aud, body: { reserve_minutes: 9 } })).status, 403);
 });
+
+test('el Administrador no opera dentro de las cooperativas (HU-34)', async () => {
+  const sa = await login('admin@rutaec.test');
+  assert.equal((await api('GET', '/api/coop/buses', { token: sa })).status, 403);
+  assert.equal((await api('GET', '/api/coop/buses?coop_id=1', { token: sa })).status, 403);
+  assert.equal((await api('GET', '/api/office/trips', { token: sa })).status, 403);
+  assert.equal((await api('GET', '/api/admin/cooperatives', { token: sa })).status, 200);
+  const g = await login('gerente.andina@rutaec.test');
+  assert.equal((await api('GET', '/api/coop/buses', { token: g })).status, 200);
+  assert.equal((await api('GET', '/api/admin/stats', { token: g })).status, 403);
+});
