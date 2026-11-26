@@ -121,6 +121,7 @@ docs/              Diseño (PDF), arquitectura, BD, API, Git, roles, demostraci�
 
 ## Trabajo en equipo (Git y GitHub)
 
+- Gobernanza y control de cambios (comité, tipos ITIL y proceso): [`GOVERNANCE.md`](GOVERNANCE.md).
 - Flujo de ramas y pasos para probar la rama de un compañero: [`CONTRIBUTING.md`](CONTRIBUTING.md) y [`docs/FLUJO_GIT.md`](docs/FLUJO_GIT.md).
 - Roles, permisos y cuentas de demostración: [`docs/ROLES_Y_PERMISOS.md`](docs/ROLES_Y_PERMISOS.md) · Guion de la defensa: [`docs/GUIA_DE_DEMOSTRACION.md`](docs/GUIA_DE_DEMOSTRACION.md).
 - Seguimiento: *issues* con código `HU-n` y tablero (GitHub Projects) del repositorio.
