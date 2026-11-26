@@ -10,7 +10,7 @@ const crew = [requireAuth, requireRole('DRIVER', 'ASSISTANT')];
 function myTrip(req, id) {
   const t = core.getTrip(+id);
   if (!t) throw httpError(404, 'Viaje no encontrado');
-  if (req.user.role !== 'SUPERADMIN' && t.driver_id !== req.user.id && t.assistant_id !== req.user.id) throw httpError(403, 'Este viaje no está asignado a ti');
+  if (t.driver_id !== req.user.id && t.assistant_id !== req.user.id) throw httpError(403, 'Este viaje no está asignado a ti');
   return t;
 }
 const counts = (tripId) => db.prepare(`SELECT COALESCE(SUM(status IN ('VALIDO','ABORDADO','BAJO')),0) total, COALESCE(SUM(status IN ('ABORDADO','BAJO')),0) boarded FROM tickets WHERE trip_id=?`).get(tripId);
@@ -26,7 +26,7 @@ router.get('/driver/history', ...crew, (req, res) => {
 });
 router.post('/driver/trips/:id/start', ...crew, (req, res) => {
   const t = myTrip(req, req.params.id);
-  if (t.driver_id !== req.user.id && req.user.role !== 'SUPERADMIN') throw httpError(403, 'Solo el chofer puede iniciar el viaje');
+  if (t.driver_id !== req.user.id) throw httpError(403, 'Solo el chofer puede iniciar el viaje');
   if (!['PROGRAMADO', 'ABORDANDO'].includes(t.status)) throw httpError(409, 'El viaje no se puede iniciar (estado ' + t.status + ')');
   if (t.date > nowLocal().slice(0, 10)) throw httpError(409, 'Aún no es la fecha del viaje');
   db.prepare("UPDATE trips SET status='EN_RUTA', started_at=? WHERE id=?").run(nowLocal(), t.id);
@@ -35,7 +35,7 @@ router.post('/driver/trips/:id/start', ...crew, (req, res) => {
 });
 router.post('/driver/trips/:id/finish', ...crew, (req, res) => {
   const t = myTrip(req, req.params.id);
-  if (t.driver_id !== req.user.id && req.user.role !== 'SUPERADMIN') throw httpError(403, 'Solo el chofer puede finalizar el viaje');
+  if (t.driver_id !== req.user.id) throw httpError(403, 'Solo el chofer puede finalizar el viaje');
   if (t.status !== 'EN_RUTA') throw httpError(409, 'El viaje no está en ruta');
   tx(() => {
     db.prepare("UPDATE trips SET status='FINALIZADO', finished_at=? WHERE id=?").run(nowLocal(), t.id);
