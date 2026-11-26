@@ -7,6 +7,13 @@
 - [ ] refactor / perf
 - [ ] docs / ci / chore
 
+## Control de cambios
+- Solicitud de cambio: Closes #
+- Tipo ITIL: Normal / Estándar / Emergencia
+- Riesgo: Bajo / Medio / Alto
+- Plan de reversión: `git revert -m 1 <fusión>` y, si hay migración, `npm run db:restore -- data/backups/<respaldo>.db`
+- [ ] Cambio de esquema: incluye la migración `server/migrations/NNN_*.sql` y corrige en este mismo PR todos los archivos que usan esas tablas
+
 ## ¿Cómo probarlo?
 <!-- Pasos para que el revisor lo pruebe en su PC: rama, comandos, cuentas de demo, resultado esperado -->
 1.
