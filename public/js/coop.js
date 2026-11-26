@@ -1,7 +1,7 @@
 /* Cooperativa: panel, viajes, hojas de ruta, frecuencias, flota, plantillas, personal, configuración, reportes y auditoría */
 'use strict';
 const CO = ['COOP_ADMIN', 'AUDITOR'];
-const canWrite = () => ['COOP_ADMIN', 'SUPERADMIN'].includes(App.user.role);
+const canWrite = () => App.user.role === 'COOP_ADMIN';
 
 /* ---------- CRUD genérico basado en definición de campos ---------- */
 const CR = {};
