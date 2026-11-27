@@ -2,8 +2,22 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y versionado semántico.
 
+## [Sin publicar]
+
+## [0.5.2] - 2026-11-23 — Correcciones de emergencia (hotfix HU-34 y HU-35)
+
+### Seguridad
+- El Administrador (`SUPERADMIN`) ya no pasa por encima de los permisos: solo entra a `/admin/*` y no puede operar dentro de una cooperativa con `?coop_id=` (HU-34).
+
+### Corregido
+- Los datos duplicados (RUC, nombre de cooperativa, placa, número de unidad) responden 409 con un mensaje claro en lugar de un error 500 (HU-35).
+- El alta de cooperativas exige RUC válido, nombre único y color `#RRGGBB`; el alta de buses exige grupo, chasis, carrocería y año (HU-35).
+
 ## [0.5.1] - 2026-11-03 — Corrección (hotfix HU-30)
-### Corregido- La fecha de lanzamiento (`date-released`) de `CITATION.cff` ahora es la del release v0.5.0.- La versión citada y la declarada en el proyecto pasan a 0.5.1.
+
+### Corregido
+- La fecha de lanzamiento (`date-released`) de `CITATION.cff` ahora es la del release v0.5.0.
+- La versión citada y la declarada en el proyecto pasan a 0.5.1.
 
 ## [0.5.0] - 2026-11-02 — Primera presentación
 
@@ -22,3 +36,8 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y 
 
 ### Pendiente para la segunda etapa
 Gestión del control de cambios con Jira (solicitudes de cambio, comité y trazabilidad) y los cambios que de ella resulten.
+
+[Sin publicar]: https://github.com/josefranciscotb17/rutaec/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/josefranciscotb17/rutaec/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/josefranciscotb17/rutaec/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/josefranciscotb17/rutaec/releases/tag/v0.5.0
