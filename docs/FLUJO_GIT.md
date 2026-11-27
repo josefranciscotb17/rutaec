@@ -3,7 +3,7 @@
 ## Primera vez
 
 ```bash
-git clone https://github.com/ORGANIZACION/rutaec.git
+git clone https://github.com/josefranciscotb17/rutaec.git
 cd rutaec
 git switch develop
 npm install
