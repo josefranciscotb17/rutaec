@@ -13,6 +13,9 @@
     "dev": "node --watch server/index.js",
     "seed": "node server/seed.js",
     "db:reset": "node server/seed.js --reset",
+    "db:migrate": "node -e \"require('./server/db')\"",
+    "db:backup": "node scripts/db-backup.js",
+    "db:restore": "node scripts/db-restore.js",
     "test": "node --test",
     "postinstall": "node scripts/postinstall.js",
     "docs:api": "node scripts/gen-api-doc.js"

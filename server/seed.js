@@ -24,7 +24,7 @@ const asc = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().repl
 
 function wipe() {
   db.pragma('foreign_keys = OFF');
-  for (const { name } of db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()) db.prepare(`DELETE FROM ${name}`).run();
+  for (const { name } of db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'schema_version'").all()) db.prepare(`DELETE FROM ${name}`).run();
   db.pragma('foreign_keys = ON');
 }
 function proofPdf(ref, amount) {

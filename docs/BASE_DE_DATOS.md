@@ -61,3 +61,21 @@ erDiagram
 2. Tipos: `INTEGER PRIMARY KEY` → `BIGSERIAL`; fechas de texto → `timestamp` (o conservar texto); `CHECK` se mantienen.
 3. Transacciones: `createOrder`/`issueTickets` pasan a `BEGIN … COMMIT` con `SELECT … FOR UPDATE` sobre el viaje para serializar ventas.
 4. Añadir `EXCLUDE USING gist` (extensión `btree_gist`) para impedir solapes de tramo por asiento a nivel de BD.
+
+## Migraciones (desde v0.6.0)
+
+`server/schema.sql` es el **esquema base v0.5.1** y no se edita para cambiar tablas. Cada cambio de esquema es un archivo `server/migrations/NNN_descripcion.sql` que `server/migrate.js` aplica una sola vez al arrancar (lo anota en la tabla `schema_version`).
+
+| Comando | Qué hace |
+|---|---|
+| `npm run db:migrate` | Aplica las migraciones pendientes sin levantar el servidor |
+| `npm run db:backup` | Copia la base a `data/backups/rutaec-AAAAMMDD-HHMM-manual.db` |
+| `npm run db:restore -- <archivo>` | Con el servidor detenido, reemplaza la base por un respaldo |
+| `npm run db:reset` | Borra los datos y recarga la demostración (conserva `schema_version`) |
+
+Reglas:
+1. Antes de migrar una base con datos se crea un respaldo automático en `data/backups/`.
+2. Cada migración corre en una transacción; si falla o deja llaves foráneas rotas (`PRAGMA foreign_key_check`), se revierte completa y el servidor no arranca.
+3. Para cambiar un `CHECK` o un `NOT NULL`, SQLite exige reconstruir la tabla: `CREATE TABLE x_new` → `INSERT INTO x_new SELECT …` → `DROP TABLE x` → `ALTER TABLE x_new RENAME TO x` → recrear índices.
+4. Una migración ya fusionada en `develop` no se edita nunca: si hay un error, se corrige con una migración nueva.
+5. Números reservados para la v0.6.0: 001 control de versiones, 002 roles, 003 asientos y fotos, 004 frecuencias, 005 rutas destacadas, 006 pasajeros y descuentos, 007 abordaje en ruta.

@@ -16,7 +16,8 @@ db.transaction = (fn) => (...args) => {
 };
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
-db.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+db.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8')); // esquema base v0.5.1
+require('./migrate').run(db, { dataDir: DATA, log: process.env.NODE_ENV === 'test' ? () => {} : console.log }); // cambios posteriores: server/migrations/
 // Caché de sentencias preparadas: evita recompilar el mismo SQL en cada petición
 const rawPrepare = db.prepare.bind(db), stmts = new Map();
 db.prepare = (sql) => { let st = stmts.get(sql); if (!st) { st = rawPrepare(sql); stmts.set(sql, st); } return st; };

@@ -1,4 +1,5 @@
 -- RutaEC - Esquema de base de datos (SQLite). Dinero en centavos enteros. Fechas locales America/Guayaquil (texto ISO sin zona).
+-- ESQUEMA BASE v0.5.1 (congelado): no edites este archivo para cambiar tablas; crea una migración en server/migrations/ (ver docs/BASE_DE_DATOS.md).
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
