@@ -8,7 +8,7 @@ const { audit } = require('../lib/notify');
 const { imageUpload, saveImage } = require('../lib/upload');
 const { httpError, validEmail, validRuc, validCedula, randCode, today, addDays } = require('../lib/util');
 
-const sa = requireRole(), both = requireRole('AUDITOR'); // requireRole() sin roles = solo SUPERADMIN
+const sa = requireRole('SUPERADMIN'), both = requireRole('SUPERADMIN', 'AUDITOR');
 const need = (v, m) => { if (v === undefined || v === null || String(v).trim() === '') throw httpError(400, m); };
 
 /* ---- Ajustes del sitio (marca, redes, políticas, reglas de negocio) ---- */
