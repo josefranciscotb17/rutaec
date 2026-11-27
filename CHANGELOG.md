@@ -4,14 +4,18 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y 
 
 ## [Sin publicar]
 
-## [0.5.2] - 2026-11-23 — Correcciones de emergencia (hotfix HU-34 y HU-35)
-
-### Seguridad
-- El Administrador (`SUPERADMIN`) ya no pasa por encima de los permisos: solo entra a `/admin/*` y no puede operar dentro de una cooperativa con `?coop_id=` (HU-34).
+## [0.5.3] - 2026-11-27 — Corrección de emergencia (hotfix HU-35)
 
 ### Corregido
 - Los datos duplicados (RUC, nombre de cooperativa, placa, número de unidad) responden 409 con un mensaje claro en lugar de un error 500 (HU-35).
 - El alta de cooperativas exige RUC válido, nombre único y color `#RRGGBB`; el alta de buses exige grupo, chasis, carrocería y año (HU-35).
+- El Administrador vuelve a abrir sus pantallas: el hotfix HU-34 dejó `ADM = ['AUDITOR']` en `public/js/admin.js` y, sin el bypass, lo bloqueaba (seguimiento de HU-34, incluido en esta versión).
+
+## [0.5.2] - 2026-11-26 — Corrección de emergencia (hotfix HU-34)
+
+### Seguridad
+- El Administrador (`SUPERADMIN`) ya no pasa por encima de los permisos: solo entra a `/admin/*` y no puede operar dentro de una cooperativa con `?coop_id=` (HU-34).
+- Nota: el tag `v0.5.2` se creó sobre la fusión del PR #113; en ese commit `package.json` todavía decía 0.5.1.
 
 ## [0.5.1] - 2026-11-03 — Corrección (hotfix HU-30)
 
@@ -37,7 +41,8 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y 
 ### Pendiente para la segunda etapa
 Gestión del control de cambios con Jira (solicitudes de cambio, comité y trazabilidad) y los cambios que de ella resulten.
 
-[Sin publicar]: https://github.com/josefranciscotb17/rutaec/compare/v0.5.2...HEAD
+[Sin publicar]: https://github.com/josefranciscotb17/rutaec/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/josefranciscotb17/rutaec/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/josefranciscotb17/rutaec/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/josefranciscotb17/rutaec/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/josefranciscotb17/rutaec/releases/tag/v0.5.0

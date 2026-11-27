@@ -8,7 +8,7 @@ Este repositorio implementa el **Documento de Diseño v1** (`docs/RutaEC_Documen
 
 ---
 
-## 📌 Estado del proyecto (v0.5.2)
+## 📌 Estado del proyecto (v0.5.3)
 
 | Módulo | Estado |
 |---|---|
