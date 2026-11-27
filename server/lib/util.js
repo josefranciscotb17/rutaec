@@ -37,5 +37,8 @@ function validEmail(e) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e || ''); }
 const money = (c) => '$' + (c / 100).toFixed(2);
 const hhmm = (s) => s.slice(11, 16);
 function httpError(status, message, code) { const e = new Error(message); e.status = status; e.code = code; return e; }
+/** Tipo de restricción violada. node:sqlite no usa SQLITE_CONSTRAINT_* en err.code: el dato real está en err.errcode (códigos extendidos de SQLite). */
+const SQLITE_CONSTRAINT = { 19: 'CONSTRAINT', 275: 'CHECK', 787: 'FOREIGNKEY', 1299: 'NOTNULL', 1555: 'UNIQUE', 1811: 'TRIGGER', 2067: 'UNIQUE' };
+function constraintKind(e) { return e && (SQLITE_CONSTRAINT[e.errcode] || (/^SQLITE_CONSTRAINT_(\w+)/.exec(e.code || '') || [])[1] || null); }
 
-module.exports = { nowLocal, today, parseLocal, addMinutes, addDays, diffMinutes, dow, randCode, validCedula, makeCedula, validRuc, validPlate, validEmail, money, hhmm, httpError, TZ };
+module.exports = { nowLocal, today, parseLocal, addMinutes, addDays, diffMinutes, dow, randCode, validCedula, makeCedula, validRuc, validPlate, validEmail, money, hhmm, httpError, constraintKind, TZ };
