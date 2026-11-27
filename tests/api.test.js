@@ -150,3 +150,23 @@ test('el Administrador no opera dentro de las cooperativas (HU-34)', async () =>
   assert.equal((await api('GET', '/api/coop/buses', { token: g })).status, 200);
   assert.equal((await api('GET', '/api/admin/stats', { token: g })).status, 403);
 });
+
+test('alta de cooperativas: duplicados responden 409 y no 500 (HU-35)', async () => {
+  const sa = await login('admin@rutaec.test');
+  const ok = await api('POST', '/api/admin/cooperatives', { token: sa, body: { name: 'Cooperativa Demo', ruc: '1799988877001', color: '#112233' } });
+  assert.equal(ok.status, 201);
+  assert.equal((await api('POST', '/api/admin/cooperatives', { token: sa, body: { name: 'Otra', ruc: '1799988877001' } })).status, 409);
+  assert.equal((await api('POST', '/api/admin/cooperatives', { token: sa, body: { name: 'cooperativa demo', ruc: '1799988866001' } })).status, 409);
+  assert.equal((await api('POST', '/api/admin/cooperatives', { token: sa, body: { name: 'Sin RUC' } })).status, 400);
+  assert.equal((await api('POST', '/api/admin/cooperatives', { token: sa, body: { name: 'Color malo', ruc: '1799988855001', color: 'rojo' } })).status, 400);
+});
+
+test('alta de buses: datos obligatorios y placa duplicada (HU-35)', async () => {
+  const g = await login('gerente.andina@rutaec.test');
+  const groups = (await api('GET', '/api/coop/bus-groups', { token: g })).data;
+  const bus = { number: '901', plate: 'PBA-1234', chassis_brand: 'Hino', body_brand: 'Olímpica', year: 2022, group_id: groups[0].id };
+  assert.equal((await api('POST', '/api/coop/buses', { token: g, body: { ...bus, group_id: null } })).status, 400);
+  assert.equal((await api('POST', '/api/coop/buses', { token: g, body: bus })).status, 201);
+  assert.equal((await api('POST', '/api/coop/buses', { token: g, body: { ...bus, number: '902' } })).status, 409);
+  assert.equal((await api('POST', '/api/coop/buses', { token: g, body: { ...bus, plate: 'PBA-1235' } })).status, 409);
+});
