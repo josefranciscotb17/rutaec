@@ -9,12 +9,12 @@ const { requireRole, coopId } = require('../lib/auth');
 const { notify, audit } = require('../lib/notify');
 const { generateRotation, findConflicts } = require('../lib/rotation');
 const { imageUpload, saveImage } = require('../lib/upload');
-const { nowLocal, today, addDays, httpError, validCedula, validEmail, validPlate, validRuc, randCode, money, dow } = require('../lib/util');
+const { nowLocal, today, addDays, httpError, constraintKind, validCedula, validEmail, validPlate, validRuc, randCode, money, dow } = require('../lib/util');
 
 const read = requireRole('COOP_ADMIN', 'AUDITOR');
 const write = requireRole('COOP_ADMIN');
 const asJson = (v) => (typeof v === 'string' ? v : JSON.stringify(v ?? []));
-const fkGuard = (fn) => (req, res, next) => { try { fn(req, res, next); } catch (e) { if (String(e.code).startsWith('SQLITE_CONSTRAINT_FOREIGNKEY')) e = httpError(409, 'No se puede eliminar: tiene registros asociados. Desactívalo en su lugar.'); next(e); } };
+const fkGuard = (fn) => (req, res, next) => { try { fn(req, res, next); } catch (e) { if (constraintKind(e) === 'FOREIGNKEY') e = httpError(409, 'No se puede eliminar: tiene registros asociados. Desactívalo en su lugar.'); next(e); } };
 function own(table, id, cid) { const r = db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(+id); if (!r || r.coop_id !== cid) throw httpError(404, 'Registro no encontrado'); return r; }
 
 /** CRUD genérico con alcance por cooperativa */
@@ -159,9 +159,15 @@ function busValidate(b, before, cid) {
   need(b.number, 'Indica el número de unidad');
   b.plate = String(b.plate || '').toUpperCase().trim();
   if (!validPlate(b.plate)) throw httpError(400, 'Placa inválida (formato ABC-1234)');
+  if (!before) { // alta: datos completos del bus (los buses ya registrados se editan sin exigirlos)
+    need(b.chassis_brand, 'Indica la marca del chasis'); need(b.body_brand, 'Indica la marca de la carrocería');
+    need(b.year, 'Indica el año del modelo'); need(b.group_id, 'Asigna el bus a un grupo');
+  }
   if (b.year && (b.year < 1990 || b.year > new Date().getFullYear() + 1)) throw httpError(400, 'Año inválido');
   b.status = ['ACTIVO', 'MANTENIMIENTO', 'BAJA'].includes(b.status) ? b.status : 'ACTIVO';
   if (b.group_id) own('bus_groups', b.group_id, cid);
+  if (db.prepare('SELECT 1 FROM buses WHERE plate=? AND id<>?').get(b.plate, before ? before.id : 0)) throw httpError(409, `La placa ${b.plate} ya está registrada`);
+  if (db.prepare('SELECT 1 FROM buses WHERE coop_id=? AND number=? AND id<>?').get(cid, String(b.number), before ? before.id : 0)) throw httpError(409, `Ya existe la unidad N.º ${b.number}`);
 }
 router.get('/coop/buses', read, (req, res) => {
   res.json(db.prepare('SELECT b.*, g.name AS group_name FROM buses b LEFT JOIN bus_groups g ON g.id=b.group_id WHERE b.coop_id=? ORDER BY b.number+0, b.number').all(coopId(req)).map(b => ({ ...b, amenities: JSON.parse(b.amenities || '[]') })));
