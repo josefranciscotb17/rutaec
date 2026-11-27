@@ -1,9 +1,9 @@
 # Responsables por área (GitHub los agrega automáticamente como revisores del PR).
-# Reemplaza GH_* por el usuario real de GitHub de cada integrante antes de hacer el commit.
-*                          @josefranciscotb17
-/server/                   @josefranciscotb17 @michaelrosillo787-alt
+# Comité de cambios: ver GOVERNANCE.md. Cuando el equipo lo defina, agrega sus usuarios en /GOVERNANCE.md y /server/migrations/.
+*                          @michaelrosillo787-alt @paotaipe501-hub
+/server/                   @michaelrosillo787-alt
 /server/schema.sql         @michaelrosillo787-alt
-/server/lib/core.js        @josefranciscotb17
+/server/lib/core.js        @paotaipe501-hub
 /server/routes/coop.js     @michaelrosillo787-alt
 /server/routes/sales.js    @paotaipe501-hub
 /server/routes/admin.js    @paotaipe501-hub
@@ -15,6 +15,10 @@
 /public/js/office.js       @paotaipe501-hub
 /public/js/admin.js        @tituanadiana65-glitch
 /docs/                     @paotaipe501-hub
-/tests/                    @josefranciscotb17
-/.github/                  @tituanadiana65-glitch @josefranciscotb17
-/SECURITY.md               @josefranciscotb17
+/tests/                    @tituanadiana65-glitch
+/.github/                  @tituanadiana65-glitch
+/SECURITY.md               @tituanadiana65-glitch
+/server/migrations/        @michaelrosillo787-alt @Korayma25
+/server/migrate.js         @michaelrosillo787-alt
+/GOVERNANCE.md             @tituanadiana65-glitch @paotaipe501-hub
+/CHANGELOG.md              @paotaipe501-hub

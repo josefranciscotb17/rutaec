@@ -5,7 +5,7 @@
 ## 1. Preparar tu computador
 
 ```bash
-git clone https://github.com/ORGANIZACION/rutaec.git && cd rutaec
+git clone https://github.com/josefranciscotb17/rutaec.git && cd rutaec
 npm install          # instala dependencias y copia jsQR a public/vendor
 cp .env.example .env # opcional
 npm start            # primera vez: crea la base y carga datos de demostración

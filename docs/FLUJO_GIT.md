@@ -3,7 +3,7 @@
 ## Primera vez
 
 ```bash
-git clone https://github.com/ORGANIZACION/rutaec.git
+git clone https://github.com/josefranciscotb17/rutaec.git
 cd rutaec
 git switch develop
 npm install
@@ -70,3 +70,10 @@ git switch main && git switch -c hotfix/HU-14-descripcion
 ## Seguimiento con issues y tablero
 
 Cada historia de usuario es un *issue* con código `HU-n` en el título. El tablero (GitHub Projects) tiene las columnas **Por hacer → En progreso → En revisión → Hecho**. Al abrir el Pull Request escribe `Closes #N` en la descripción: GitHub enlaza el issue con la rama y los commits, y lo pasa a *Hecho* cuando se fusiona.
+
+## Control de cambios desde la v0.6.0
+
+- `main` exige **2 aprobaciones** (comité de cambios, ver `GOVERNANCE.md`), CI en verde y no admite push directo ni excepciones para administradores. Release y hotfix entran solo por PR.
+- Antes de abrir un PR: `git fetch origin && git merge origin/develop` (no uses `rebase` en ramas compartidas), `npm test` y, si tu PR trae una migración, `npm run db:backup` y `npm run db:migrate` sobre tu base con datos.
+- Las migraciones (`server/migrations/NNN_*.sql`) se fusionan en orden numérico. Una migración ya fusionada no se edita.
+- Si una fusión rompe `develop`: rama `revert/HU-n-*`, `git revert -m 1 <commit de fusión>` y PR.
