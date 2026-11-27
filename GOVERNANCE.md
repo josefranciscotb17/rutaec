@@ -6,9 +6,11 @@ Este documento define quién aprueba los cambios del sistema, cómo se solicitan
 
 | Función | Integrante | Usuario de GitHub |
 |---|---|---|
-| Integrante 1 del comité | PENDIENTE (lo define el equipo) | PENDIENTE |
-| Integrante 2 del comité | PENDIENTE (lo define el equipo) | PENDIENTE |
-| Suplente | PENDIENTE (lo define el equipo) | PENDIENTE |
+| Integrante 1 del comité | Michael Steve Rosillo Córdova | `michaelrosillo787-alt` |
+| Integrante 2 del comité | Britthany Korayma Pico Coello | `Korayma25` |
+| Suplente | Paola Alexandra Taipe Tixilema | `paotaipe501-hub` |
+
+Regla del equipo: **nadie aprueba su propio cambio**. Si el autor es Michael, aprueban Korayma y Paola; si es Korayma, aprueban Michael y Paola.
 
 Responsabilidades del comité:
 - Revisar el análisis de impacto de cada solicitud de cambio Normal o de Emergencia.
@@ -50,3 +52,19 @@ GitHub no cuenta la aprobación del autor del PR: si un integrante del comité a
 
 - Código: `git revert -m 1 <commit de fusión>` en una rama `revert/HU-n-*` y PR con las mismas aprobaciones que el cambio original.
 - Datos: detener el servidor y `npm run db:restore -- data/backups/<respaldo>.db` (el ejecutor de migraciones respalda la base antes de migrar).
+
+## 6. Estados de una solicitud y etiquetas
+
+Cada issue de solicitud de cambio tiene **una** etiqueta de estado. La plataforma de control de cambios del equipo lee estas etiquetas desde GitHub para mostrar el tablero y la trazabilidad.
+
+| Estado ITIL | Etiqueta | Quién la pone | Cuándo |
+|---|---|---|---|
+| Registrada | `pendiente-comite` | Quien crea el issue | Al abrir la solicitud |
+| Aprobada | `cambio-aprobado` | Comité | Después de revisar el análisis de impacto |
+| En implementación | `en-implementacion` | Responsable | Al crear la rama |
+| En revisión | `en-revision` | Responsable | Al abrir el PR |
+| Implementada | `implementado` | Quien fusiona | Al fusionar el PR (el issue se cierra con `Closes #N`) |
+| Rechazada | `rechazado` | Comité | La solicitud no se hace; el issue se cierra como *not planned* |
+| Diferida | `diferido` | Comité | Queda para una versión posterior; el issue se cierra como *not planned* |
+
+La decisión del comité se deja como comentario en el issue (quién aprobó, cuándo y por qué). Las actas de cada reunión se guardan en la plataforma del equipo con el enlace a los issues tratados.
