@@ -1,7 +1,7 @@
 /* Cooperativa: panel, viajes, hojas de ruta, frecuencias, flota, plantillas, personal, configuración, reportes y auditoría */
 'use strict';
 const CO = ['COOP_ADMIN', 'AUDITOR'];
-const canWrite = () => ['COOP_ADMIN', 'SUPERADMIN'].includes(App.user.role);
+const canWrite = () => App.user.role === 'COOP_ADMIN';
 
 /* ---------- CRUD genérico basado en definición de campos ---------- */
 const CR = {};
@@ -196,8 +196,8 @@ route('/coop/buses', async (p, q) => {
     load: async () => ({ groups: await api('/coop/bus-groups'), tpls: await api('/coop/seat-templates') }),
     cols: [['N.º', (r) => html`<b>${r.number}</b>`], ['Placa', (r) => r.plate], ['Grupo', (r) => r.group_name || '—'], ['Chasis / carrocería', (r) => `${r.chassis_brand || ''} / ${r.body_brand || ''}`], ['Año', (r) => r.year || '—'], ['Asientos', (r) => `${r.capacity} · ${r.floors} piso(s)`], ['Rev. técnica', (r) => r.tech_review_expires || '—'], ['Estado', (r) => chip(r.status)]],
     extra: (r) => html`<a class="btn sm" href="#/coop/buses/${r.id}/seats">💺 Asientos</a> `,
-    fields: (c) => [{ name: 'number', label: 'N.º de unidad', required: true }, { name: 'plate', label: 'Placa', required: true, ph: 'PBA-1234' }, { name: 'group_id', label: 'Grupo', type: 'select', num: true, empty: '— sin grupo —', options: c.groups.map((g) => [g.id, g.name]) },
-      { name: 'status', label: 'Estado', type: 'select', options: [['ACTIVO', 'Activo'], ['MANTENIMIENTO', 'Mantenimiento'], ['BAJA', 'De baja']] }, { name: 'chassis_brand', label: 'Marca de chasis' }, { name: 'body_brand', label: 'Marca de carrocería' }, { name: 'model', label: 'Modelo' }, { name: 'year', label: 'Año', type: 'number' }, { name: 'color', label: 'Color' },
+    fields: (c) => [{ name: 'number', label: 'N.º de unidad', required: true }, { name: 'plate', label: 'Placa', required: true, ph: 'PBA-1234' }, { name: 'group_id', label: 'Grupo', type: 'select', num: true, required: true, empty: '— elige un grupo —', options: c.groups.map((g) => [g.id, g.name]) },
+      { name: 'status', label: 'Estado', type: 'select', options: [['ACTIVO', 'Activo'], ['MANTENIMIENTO', 'Mantenimiento'], ['BAJA', 'De baja']] }, { name: 'chassis_brand', label: 'Marca de chasis', required: true }, { name: 'body_brand', label: 'Marca de carrocería', required: true }, { name: 'model', label: 'Modelo' }, { name: 'year', label: 'Año del modelo', type: 'number', required: true, min: 1990 }, { name: 'color', label: 'Color' },
       { name: 'tech_review_expires', label: 'Vence revisión técnica', type: 'date' }, { name: 'registration_expires', label: 'Vence matrícula', type: 'date' }, { name: 'template_id', label: 'Plantilla de asientos (aplica al guardar)', type: 'select', num: true, empty: '— conservar actuales —', options: c.tpls.map((t) => [t.id, `${t.name} (${t.seats})`]) },
       { name: 'amenities', label: 'Servicios (separados por coma)', full: true, ph: 'Aire acondicionado, WiFi, Baño' }],
     transform: (b) => { b.amenities = String(b.amenities || '').split(',').map((x) => x.trim()).filter(Boolean); },

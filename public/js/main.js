@@ -13,7 +13,7 @@ function navGroups(u) {
   if (u.role === 'OFFICE') return [['Oficina', NAV.OFFICE]];
   if (u.role === 'DRIVER' || u.role === 'ASSISTANT') return [['Ruta', NAV.DRIVER]];
   if (u.role === 'COOP_ADMIN' || u.role === 'AUDITOR') return [['Cooperativa', NAV.COOP], ...(u.role === 'AUDITOR' ? [['Global', [['/admin', 'Resumen global', '🌎'], ['/admin/audit', 'Auditoría y correos', '🛡️']]]] : [])];
-  return [['Global', NAV.ADMIN], ['Cooperativa (contexto)', NAV.COOP], ['Operación', NAV.OFFICE.slice(1)]];
+  return [['Global', NAV.ADMIN]]; // el Administrador no opera dentro de las cooperativas
 }
 let shellKey = '';
 async function renderShell(path = '/') {
@@ -22,7 +22,7 @@ async function renderShell(path = '/') {
     shellKey = key;
     const cfg = App.cfg, groups = navGroups(u), isStaff = u && STAFF.includes(u.role);
     const logo = cfg.logo ? `<img src="${esc(cfg.logo)}" alt="">` : `<span class="dot">R</span>`;
-    const side = isStaff ? `<aside class="side" id="side">${['SUPERADMIN', 'AUDITOR'].includes(u.role) ? '<div class="field" style="padding:0 6px"><label>Cooperativa en contexto</label><select id="coopCtx" data-change="coopCtx"></select></div>' : ''}${groups.map(([t, items]) => `${t ? `<h4>${esc(t)}</h4>` : ''}${items.map(([p, l, i]) => `<a href="#${p}" data-path="${p}">${i} ${esc(l)}</a>`).join('')}`).join('')}</aside>` : '';
+    const side = isStaff ? `<aside class="side" id="side">${u.role === 'AUDITOR' ? '<div class="field" style="padding:0 6px"><label>Cooperativa en contexto</label><select id="coopCtx" data-change="coopCtx"></select></div>' : ''}${groups.map(([t, items]) => `${t ? `<h4>${esc(t)}</h4>` : ''}${items.map(([p, l, i]) => `<a href="#${p}" data-path="${p}">${i} ${esc(l)}</a>`).join('')}`).join('')}</aside>` : '';
     const topnav = !isStaff ? `<nav>${NAV.CLIENT.map(([p, l]) => `<a href="#${p}" data-path="${p}">${esc(l)}</a>`).join('')}</nav>` : '';
     const tabbar = !isStaff ? `<div class="tabbar">${[['/', 'Buscar', '🔎'], ['/tickets', 'Boletos', '🎫'], ['/orders', 'Compras', '🧾'], [u ? '/profile' : '/login', u ? 'Perfil' : 'Entrar', '👤']].map(([p, l, i]) => `<a href="#${p}" data-path="${p}"><b>${i}</b>${l}</a>`).join('')}</div>` : '';
     const foot = !isStaff ? `<footer class="foot"><div class="cols"><div><b>${esc(cfg.site_name)}</b><br>${esc(cfg.tagline)}<br><span class="small">© ${new Date().getFullYear()} · Ecuador</span></div>
@@ -52,7 +52,7 @@ App.A.notifs = async () => {
 };
 
 async function ensureCoopCtx() {
-  if (!App.user || !['SUPERADMIN', 'AUDITOR'].includes(App.user.role)) return;
+  if (!App.user || App.user.role !== 'AUDITOR') return;
   try { const l = await api('/admin/cooperatives'); let cur = ''; try { cur = localStorage.getItem('rutaec_coop') || ''; } catch (e) { /* */ } if (!l.find((c) => String(c.id) === cur)) { try { localStorage.setItem('rutaec_coop', String(l[0] && l[0].id || '')); } catch (e) { /* */ } } } catch (e) { /* */ }
 }
 async function boot() {

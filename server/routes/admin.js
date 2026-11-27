@@ -8,7 +8,7 @@ const { audit } = require('../lib/notify');
 const { imageUpload, saveImage } = require('../lib/upload');
 const { httpError, validEmail, validRuc, validCedula, randCode, today, addDays } = require('../lib/util');
 
-const sa = requireRole(), both = requireRole('AUDITOR'); // requireRole() sin roles = solo SUPERADMIN
+const sa = requireRole('SUPERADMIN'), both = requireRole('SUPERADMIN', 'AUDITOR');
 const need = (v, m) => { if (v === undefined || v === null || String(v).trim() === '') throw httpError(400, m); };
 
 /* ---- Ajustes del sitio (marca, redes, políticas, reglas de negocio) ---- */
@@ -32,8 +32,10 @@ router.post('/admin/logo', sa, imageUpload, (req, res) => { const u = saveImage(
 /* ---- Cooperativas ---- */
 router.get('/admin/cooperatives', both, (req, res) => res.json(db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM buses WHERE coop_id=c.id) buses, (SELECT COUNT(*) FROM users WHERE coop_id=c.id) users FROM cooperatives c ORDER BY c.name`).all()));
 router.post('/admin/cooperatives', sa, (req, res) => {
-  const b = req.body || {}; need(b.name, 'Indica el nombre');
-  if (b.ruc && !validRuc(b.ruc)) throw httpError(400, 'RUC inválido (13 dígitos terminados en 001)');
+  const b = req.body || {}; need(b.name, 'Indica el nombre'); need(b.ruc, 'Indica el RUC de la cooperativa');
+  if (!validRuc(b.ruc)) throw httpError(400, 'RUC inválido (13 dígitos terminados en 001)');
+  if (b.color && !/^#[0-9a-fA-F]{6}$/.test(b.color)) throw httpError(400, 'El color debe tener el formato #RRGGBB');
+  if (db.prepare('SELECT 1 FROM cooperatives WHERE lower(trim(name))=lower(trim(?))').get(b.name)) throw httpError(409, 'Ya existe una cooperativa con ese nombre');
   const admin = b.admin || {};
   if (admin.email && !validEmail(admin.email)) throw httpError(400, 'Correo del administrador inválido');
   let pass = null, id;
@@ -52,6 +54,8 @@ router.put('/admin/cooperatives/:id', sa, (req, res) => {
   const c = db.prepare('SELECT * FROM cooperatives WHERE id=?').get(+req.params.id); if (!c) throw httpError(404, 'No encontrada');
   const b = { ...c, ...req.body };
   if (b.ruc && !validRuc(b.ruc)) throw httpError(400, 'RUC inválido');
+  if (b.color && !/^#[0-9a-fA-F]{6}$/.test(b.color)) throw httpError(400, 'El color debe tener el formato #RRGGBB');
+  if (db.prepare('SELECT 1 FROM cooperatives WHERE lower(trim(name))=lower(trim(?)) AND id<>?').get(b.name, c.id)) throw httpError(409, 'Ya existe una cooperativa con ese nombre');
   db.prepare('UPDATE cooperatives SET ruc=?,name=?,short_name=?,color=?,phone=?,email=?,address=?,active=? WHERE id=?').run(b.ruc, b.name, b.short_name, b.color, b.phone, b.email, b.address, b.active ? 1 : 0, c.id);
   audit(req, 'update', 'cooperatives', c.id, c, req.body); res.json({ ok: true });
 });

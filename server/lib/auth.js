@@ -28,12 +28,12 @@ function loadUser(req, res, next) {
 const requireAuth = (req, res, next) => req.user ? next() : next(httpError(401, 'Debes iniciar sesión', 'AUTH'));
 const requireRole = (...roles) => (req, res, next) => {
   if (!req.user) return next(httpError(401, 'Debes iniciar sesión', 'AUTH'));
-  if (req.user.role === 'SUPERADMIN' || roles.includes(req.user.role)) return next();
+  if (roles.includes(req.user.role)) return next(); // sin excepciones: el SUPERADMIN solo entra donde se le nombra (/admin/*)
   next(httpError(403, 'No tienes permiso para esta acción', 'FORBIDDEN'));
 };
-/** Cooperativa en contexto: el personal usa la suya; superadmin/auditor la indican con ?coop_id= o cabecera X-Coop-Id */
+/** Cooperativa en contexto: el personal usa la suya. El SUPERADMIN no opera dentro de las cooperativas (solo /admin/*). */
 function coopId(req) {
-  if (req.user.role === 'SUPERADMIN' || req.user.role === 'AUDITOR') {
+  if (req.user.role === 'AUDITOR') { // shortcut: lectura temporal del AUDITOR; el rol se elimina en HU-36
     const c = +(req.query.coop_id || req.headers['x-coop-id'] || (req.body && req.body.coop_id) || 0);
     if (!c) throw httpError(400, 'Selecciona una cooperativa', 'COOP_REQUIRED');
     return c;

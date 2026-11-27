@@ -34,7 +34,7 @@ async function api(path, { method = 'GET', body, form, quiet } = {}) {
   const headers = {};
   if (App.token) headers.Authorization = 'Bearer ' + App.token;
   const ctx = (() => { try { return localStorage.getItem('rutaec_coop'); } catch (e) { return null; } })();
-  if (ctx && App.user && ['SUPERADMIN', 'AUDITOR'].includes(App.user.role)) headers['X-Coop-Id'] = ctx;
+  if (ctx && App.user && App.user.role === 'AUDITOR') headers['X-Coop-Id'] = ctx;
   let payload;
   if (form) payload = form; else if (body !== undefined) { headers['Content-Type'] = 'application/json'; payload = JSON.stringify(body); }
   let res;
@@ -113,7 +113,7 @@ async function dispatch() {
     const m = path.match(r.re); if (!m) continue;
     const params = {}; r.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); });
     if (r.roles && !App.user) return go('/login?next=' + encodeURIComponent(location.hash.slice(1)));
-    if (r.roles && !(r.roles.includes(App.user.role) || App.user.role === 'SUPERADMIN')) { renderShell(); paint(view(), html`<div class="card">${empty('No tienes permiso para ver esta página.', '🔒')}</div>`); return; }
+    if (r.roles && !r.roles.includes(App.user.role)) { renderShell(); paint(view(), html`<div class="card">${empty('No tienes permiso para ver esta página.', '🔒')}</div>`); return; }
     renderShell(path);
     paint(view(), loading());
     try { await r.handler(params, q); } catch (e) { paint(view(), html`<div class="alert err">${e.message}</div>`); if (e.status === 401) logout(true); }

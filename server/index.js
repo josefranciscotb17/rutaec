@@ -11,6 +11,7 @@ const S = require('./lib/settings');
 const docs = require('./lib/docs');
 const { verify } = require('./routes/public');
 const core = require('./lib/core');
+const { constraintKind } = require('./lib/util');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -58,8 +59,10 @@ app.get(/^\/(?!api\/|uploads\/).*/, (req, res) => res.sendFile(path.join(ROOT, '
 app.use((err, req, res, next) => {
   void next;
   let status = err.status || 500, msg = err.message;
-  if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') { status = 409; msg = 'Ya existe un registro con esos datos'; }
-  else if (String(err.code || '').startsWith('SQLITE_CONSTRAINT')) { status = 409; msg = 'Los datos violan una restricción (registro relacionado o dato obligatorio)'; }
+  const ck = constraintKind(err);
+  if (ck === 'UNIQUE') { status = 409; msg = 'Ya existe un registro con esos datos'; }
+  else if (ck === 'TRIGGER') { status = 409; } // el mensaje lo escribe el disparador con RAISE(ABORT, '...')
+  else if (ck) { status = 409; msg = 'Los datos violan una restricción (registro relacionado o dato obligatorio)'; }
   else if (err.code === 'LIMIT_FILE_SIZE') { status = 413; msg = 'El archivo supera el tamaño permitido'; }
   else if (err.type === 'entity.parse.failed') { status = 400; msg = 'JSON inválido'; }
   if (status >= 500) console.error(err);

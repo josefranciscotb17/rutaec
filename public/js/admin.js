@@ -1,6 +1,6 @@
 /* Superadministrador y auditor: resumen global, cooperativas, usuarios, sitio, geografía y auditoría */
 'use strict';
-const ADM = ['AUDITOR'];
+const ADM = ['SUPERADMIN', 'AUDITOR']; // el Administrador entra a sus pantallas por rol explícito (sin bypass)
 const isSA = () => App.user.role === 'SUPERADMIN';
 
 route('/admin', async () => {
@@ -15,7 +15,7 @@ route('/admin/coops', async () => {
     key: 'coops', title: '', url: '/admin/cooperatives', single: 'cooperativa', newLabel: 'Nueva cooperativa', wide: true,
     cols: [['Nombre', (r) => html`<b style="color:${r.color}">${r.short_name || r.name}</b><div class="small muted">${r.name}</div>`], ['RUC', (r) => r.ruc || '—'], ['Buses', (r) => r.buses], ['Usuarios', (r) => r.users], ['Contacto', (r) => `${r.phone || ''} ${r.email || ''}`], ['Activa', (r) => yesno(r.active)]],
     extra: (r) => html`<button class="btn sm sec" data-act="ctxCoop" data-id="${r.id}">Administrar</button> `,
-    fields: (c, row) => [{ name: 'name', label: 'Razón social', required: true, full: true }, { name: 'short_name', label: 'Nombre corto' }, { name: 'ruc', label: 'RUC (13 dígitos, termina en 001)', maxlength: 13 }, { name: 'phone', label: 'Teléfono' }, { name: 'email', label: 'Correo', type: 'email' }, { name: 'address', label: 'Dirección', full: true }, { name: 'color', label: 'Color', type: 'color', def: '#134074' },
+    fields: (c, row) => [{ name: 'name', label: 'Razón social', required: true, full: true }, { name: 'short_name', label: 'Nombre corto' }, { name: 'ruc', label: 'RUC (13 dígitos, termina en 001)', maxlength: 13, required: true }, { name: 'phone', label: 'Teléfono' }, { name: 'email', label: 'Correo', type: 'email' }, { name: 'address', label: 'Dirección', full: true }, { name: 'color', label: 'Color', type: 'color', def: '#134074' },
       ...(row ? [{ name: 'active', label: 'Activa', type: 'checkbox' }] : [{ name: 'admin_email', label: 'Correo del administrador inicial', type: 'email', hint: 'Se crea con contraseña temporal' }, { name: 'admin_nombres', label: 'Nombres del administrador' }, { name: 'admin_apellidos', label: 'Apellidos del administrador' }])],
     transform: (b) => { if (b.admin_email) b.admin = { email: b.admin_email, nombres: b.admin_nombres, apellidos: b.admin_apellidos }; delete b.admin_email; delete b.admin_nombres; delete b.admin_apellidos; },
   };
