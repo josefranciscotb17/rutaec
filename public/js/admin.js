@@ -1,6 +1,6 @@
 /* Superadministrador y auditor: resumen global, cooperativas, usuarios, sitio, geografía y auditoría */
 'use strict';
-const ADM = ['AUDITOR'];
+const ADM = ['SUPERADMIN', 'AUDITOR']; // el Administrador entra a sus pantallas por rol explícito (sin bypass)
 const isSA = () => App.user.role === 'SUPERADMIN';
 
 route('/admin', async () => {
