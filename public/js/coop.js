@@ -1,6 +1,6 @@
 /* Cooperativa: panel, viajes, hojas de ruta, frecuencias, flota, plantillas, personal, configuración, reportes y auditoría */
 'use strict';
-const CO = ['COOP_ADMIN', 'AUDITOR'];
+const CO = ['COOP_ADMIN'];
 const canWrite = () => App.user.role === 'COOP_ADMIN';
 
 /* ---------- CRUD genérico basado en definición de campos ---------- */
@@ -69,7 +69,7 @@ route('/coop/trips', async (p, q) => {
   window.__trips = trips;
 }, CO);
 App.A.coopDate = (el) => go('/coop/trips?date=' + el.value);
-async function staffLists() { const u = await api('/coop/users'); return { drivers: u.filter((x) => x.role === 'DRIVER' && x.active), assistants: u.filter((x) => x.role === 'ASSISTANT' && x.active), buses: (await api('/coop/buses')).filter((b) => b.status === 'ACTIVO') }; }
+async function staffLists() { const u = await api('/coop/users'); return { drivers: u.filter((x) => x.role === 'BUS' && x.crew_position === 'CHOFER' && x.active), assistants: u.filter((x) => x.role === 'BUS' && x.crew_position === 'AYUDANTE' && x.active), buses: (await api('/coop/buses')).filter((b) => b.status === 'ACTIVO') }; }
 App.A.tripEdit = async (el) => {
   const t = window.__trips.find((x) => String(x.id) === el.dataset.id), L = await staffLists();
   modal('Asignar viaje ' + ftime(t.depart_at), html`<form data-submit="tripSave" data-id="${t.id}"><div class="frm"><div><label>Bus</label><select name="bus_id">${opts(L.buses, t.bus_id, (b) => b.id, (b) => `${b.number} · ${b.plate}`)}</select></div><div><label>Chofer</label><select name="driver_id"><option value="">—</option>${opts(L.drivers, t.driver_id, (u) => u.id, (u) => `${u.nombres} ${u.apellidos}`)}</select></div>
@@ -258,10 +258,10 @@ route('/coop/staff', async () => {
   await crudRender($('#crud_staff'), {
     key: 'staff', title: '', url: '/coop/users', single: 'usuario', newLabel: 'Nuevo usuario', wide: true,
     load: async () => ({ offices: await api('/coop/offices') }),
-    cols: [['Nombre', (r) => html`<b>${r.nombres} ${r.apellidos}</b><div class="small muted">${r.email}</div>`], ['Rol', (r) => ROLE[r.role]], ['Oficina', (r) => r.office || '—'], ['Licencia', (r) => (r.role === 'DRIVER' ? `${r.license || '—'} (${r.license_expires || '—'})` : '—')], ['Anula boletos', (r) => (r.role === 'OFFICE' ? yesno(r.perm_void) : '—')], ['Activo', (r) => yesno(r.active)]],
+    cols: [['Nombre', (r) => html`<b>${r.nombres} ${r.apellidos}</b><div class="small muted">${r.email}</div>`], ['Rol', (r) => roleName(r)], ['Oficina', (r) => r.office || '—'], ['Licencia', (r) => (r.crew_position === 'CHOFER' ? `${r.license || '—'} (${r.license_expires || '—'})` : '—')], ['Anula boletos', (r) => (r.role === 'OFFICE' ? yesno(r.perm_void) : '—')], ['Activo', (r) => yesno(r.active)]],
     extra: (r) => html`<button class="btn sm sec" data-act="resetPass" data-id="${r.id}">Clave</button> `,
     fields: (c) => [{ name: 'nombres', label: 'Nombres', required: true }, { name: 'apellidos', label: 'Apellidos', required: true }, { name: 'email', label: 'Correo', type: 'email', required: true }, { name: 'cedula', label: 'Cédula', maxlength: 10 }, { name: 'phone', label: 'Celular' },
-      { name: 'role', label: 'Rol', type: 'select', options: [['OFFICE', 'Oficinista'], ['DRIVER', 'Chofer'], ['ASSISTANT', 'Ayudante'], ['COOP_ADMIN', 'Administrador']] }, { name: 'office_id', label: 'Oficina (oficinistas)', type: 'select', num: true, empty: '—', options: c.offices.map((o) => [o.id, o.name]) },
+      { name: 'role', label: 'Rol', type: 'select', options: [['OFFICE', 'Oficinista'], ['BUS', 'Bus (chofer o ayudante)'], ['COOP_ADMIN', 'Cooperativa']] }, { name: 'crew_position', label: 'Posición en el bus', type: 'select', empty: '— no aplica —', options: [['CHOFER', 'Chofer'], ['AYUDANTE', 'Ayudante']] }, { name: 'office_id', label: 'Oficina (oficinistas)', type: 'select', num: true, empty: '—', options: c.offices.map((o) => [o.id, o.name]) },
       { name: 'license', label: 'N.º de licencia (choferes)' }, { name: 'license_expires', label: 'Vence licencia', type: 'date' }, { name: 'perm_void', label: 'Puede anular boletos', type: 'checkbox' }, { name: 'active', label: 'Activo', type: 'checkbox', def: 1 }],
   });
 }, CO);
@@ -286,7 +286,7 @@ App.A.uploadLogo = (el) => guard(el, async () => { const inp = $('#coopLogo') ||
 /* ---------- Reportes ---------- */
 route('/coop/reports', async (p, q) => {
   const to = q.to || todayStr(), from = q.from || addD(to, -29), r = await api(`/coop/reports/sales?from=${from}&to=${to}`);
-  paint(view(), html`<div class="row spread"><h1>Reportes de ventas</h1><form class="row" data-submit="repRange"><input type="date" name="from" value="${from}" style="width:auto"><input type="date" name="to" value="${to}" style="width:auto"><button class="btn sm">Aplicar</button><a class="btn sm sec" href="${withToken(`/coop/reports/sales?from=${from}&to=${to}&format=csv` + (App.user.role === 'SUPERADMIN' || App.user.role === 'AUDITOR' ? '&coop_id=' + (localStorage.getItem('rutaec_coop') || '') : ''))}">⬇ CSV</a></form></div>
+  paint(view(), html`<div class="row spread"><h1>Reportes de ventas</h1><form class="row" data-submit="repRange"><input type="date" name="from" value="${from}" style="width:auto"><input type="date" name="to" value="${to}" style="width:auto"><button class="btn sm">Aplicar</button><a class="btn sm sec" href="${withToken(`/coop/reports/sales?from=${from}&to=${to}&format=csv`)}">⬇ CSV</a></form></div>
     <div class="grid g4 mb"><div class="card kpi"><span>Ingresos</span><b>${money(r.totals.revenue)}</b></div><div class="card kpi"><span>Boletos</span><b>${r.totals.tickets}</b></div><div class="card kpi"><span>Descuentos otorgados</span><b>${money(r.totals.discounts)}</b></div><div class="card kpi"><span>Ocupación · No-show</span><b>${r.occupancy == null ? '—' : r.occupancy + '%'}</b><span>${r.no_show} no se presentaron</span></div></div>
     <div class="grid g2"><div class="card"><h3>Por día</h3>${r.by_day.length ? bars(r.by_day.slice(-20), 'day', 'revenue') : empty('Sin datos')}</div><div class="card"><h3>Por ruta</h3>${r.by_route.length ? bars(r.by_route, 'route', 'revenue') : empty('Sin datos')}</div>
     <div class="card"><h3>Por canal</h3>${bars(r.by_channel, 'channel', 'revenue')}<h3 class="mt">Por método de pago</h3>${bars(r.by_method, 'method', 'revenue')}</div><div class="card"><h3>Por oficina</h3>${bars(r.by_office, 'office', 'revenue')}<h3 class="mt">Por categoría de pasajero</h3>${bars(r.by_category, 'category', 'tickets', (x) => x)}</div></div>`);

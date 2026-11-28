@@ -25,7 +25,9 @@ const todayStr = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Gua
 const addD = (d, n) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 const STATUS = { RESERVADO: ['warn', 'Reservado'], EN_REVISION: ['info', 'En revisión'], PAGADO: ['ok', 'Pagado'], EXPIRADO: ['gray', 'Expirado'], CANCELADO: ['err', 'Cancelado'], VALIDO: ['ok', 'Válido'], ABORDADO: ['info', 'Abordado'], BAJO: ['gray', 'Finalizado'], ANULADO: ['err', 'Anulado'], NO_SHOW: ['gray', 'No se presentó'], PROGRAMADO: ['info', 'Programado'], ABORDANDO: ['warn', 'Abordando'], EN_RUTA: ['ok', 'En ruta'], FINALIZADO: ['gray', 'Finalizado'], APROBADO: ['ok', 'Aprobado'], RECHAZADO: ['err', 'Rechazado'], PENDIENTE: ['warn', 'Pendiente'], ACTIVO: ['ok', 'Activo'], MANTENIMIENTO: ['warn', 'Mantenimiento'], BAJA: ['err', 'De baja'], BORRADOR: ['warn', 'Borrador'], PUBLICADA: ['ok', 'Publicada'] };
 const chip = (s) => { const [c, t] = STATUS[s] || ['', s]; return html`<span class="chip ${c}">${t}</span>`; };
-const ROLE = { SUPERADMIN: 'Superadministrador', COOP_ADMIN: 'Administrador de cooperativa', OFFICE: 'Oficinista', DRIVER: 'Chofer', ASSISTANT: 'Ayudante', CLIENT: 'Cliente', AUDITOR: 'Auditor' };
+const ROLE = { SUPERADMIN: 'Administrador', COOP_ADMIN: 'Cooperativa', OFFICE: 'Oficinista', BUS: 'Bus', CLIENT: 'Cliente' };
+const CREW_POS = { CHOFER: 'chofer', AYUDANTE: 'ayudante' };
+const roleName = (u) => (u.role === 'BUS' && u.crew_position ? `Bus (${CREW_POS[u.crew_position]})` : ROLE[u.role] || u.role);
 const CAT = { ADULTO: 'Adulto', MENOR: 'Menor de edad', TERCERA_EDAD: 'Tercera edad', DISCAPACIDAD: 'Discapacidad' };
 const opts = (list, sel, val = (x) => x.id, lab = (x) => x.name) => list.map((x) => html`<option value="${val(x)}" ${String(val(x)) === String(sel) ? raw('selected') : ''}>${lab(x)}</option>`);
 
@@ -33,8 +35,6 @@ const opts = (list, sel, val = (x) => x.id, lab = (x) => x.name) => list.map((x)
 async function api(path, { method = 'GET', body, form, quiet } = {}) {
   const headers = {};
   if (App.token) headers.Authorization = 'Bearer ' + App.token;
-  const ctx = (() => { try { return localStorage.getItem('rutaec_coop'); } catch (e) { return null; } })();
-  if (ctx && App.user && App.user.role === 'AUDITOR') headers['X-Coop-Id'] = ctx;
   let payload;
   if (form) payload = form; else if (body !== undefined) { headers['Content-Type'] = 'application/json'; payload = JSON.stringify(body); }
   let res;
@@ -127,5 +127,5 @@ window.addEventListener('hashchange', dispatch);
 function setSession(token, user) { App.token = token; App.user = user; try { localStorage.setItem('rutaec_token', token); } catch (e) { /* */ } }
 function logout(expired) { App.token = null; App.user = null; try { localStorage.removeItem('rutaec_token'); } catch (e) { /* */ } if (expired) toast('Tu sesión expiró. Inicia sesión nuevamente.', 'err'); go('/login'); }
 async function refreshUser() { if (!App.token) return; try { App.user = await api('/auth/me'); } catch (e) { App.token = null; App.user = null; } }
-const HOME = { CLIENT: '/', OFFICE: '/office', DRIVER: '/driver', ASSISTANT: '/driver', COOP_ADMIN: '/coop', AUDITOR: '/coop', SUPERADMIN: '/admin' };
+const HOME = { CLIENT: '/', OFFICE: '/office', BUS: '/driver', COOP_ADMIN: '/coop', SUPERADMIN: '/admin' };
 window.App = App;

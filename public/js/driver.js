@@ -1,6 +1,6 @@
 /* Chofer / ayudante: viajes, escáner QR (con o sin conexión), pasajeros, venta en ruta e incidencias */
 'use strict';
-const CREW = ['DRIVER', 'ASSISTANT'];
+const CREW = ['BUS'];
 let DR = null;
 const Q_KEY = 'rutaec_scanq';
 const getQ = () => { try { return JSON.parse(localStorage.getItem(Q_KEY) || '[]'); } catch (e) { return []; } };
@@ -11,7 +11,7 @@ const saveMan = () => { try { localStorage.setItem(manKey(DR.trip.id), JSON.stri
 route('/driver', async () => {
   const list = await api('/driver/trips'), t = todayStr();
   const group = (title, items) => items.length ? html`<h2 class="mt">${title}</h2>${items.map(driverCard)}` : '';
-  paint(view(), html`<h1>Mis viajes</h1>${App.user.role === 'ASSISTANT' ? html`<div class="alert">Eres ayudante: puedes escanear, vender y registrar incidencias. Solo el chofer inicia y finaliza el viaje.</div>` : ''}
+  paint(view(), html`<h1>Mis viajes</h1>${App.user.crew_position === 'AYUDANTE' ? html`<div class="alert">Eres ayudante: puedes escanear, vender y registrar incidencias. Solo el chofer inicia y finaliza el viaje.</div>` : ''}
     ${list.length ? html`${group('Hoy', list.filter((x) => x.date === t))}${group('Próximos', list.filter((x) => x.date > t))}${group('Ayer', list.filter((x) => x.date < t))}` : html`<div class="card">${empty('No tienes viajes asignados en los próximos días.', '🚌')}</div>`}`);
 }, CREW);
 function driverCard(x) {
@@ -39,7 +39,7 @@ async function loadMan() {
 }
 function counts() { const t = DR.man ? DR.man.tickets : []; return { total: t.filter((x) => ['VALIDO', 'ABORDADO', 'BAJO'].includes(x.status)).length, boarded: t.filter((x) => ['ABORDADO', 'BAJO'].includes(x.status)).length }; }
 function drawConsole() {
-  const x = DR.trip, c = counts(), pend = getQ().length, isDriver = App.user.role === 'DRIVER';
+  const x = DR.trip, c = counts(), pend = getQ().length, isDriver = App.user.crew_position === 'CHOFER';
   paint(view(), html`<a href="#/driver" class="small">◀ Mis viajes</a><div class="card mt"><div class="row spread"><div><h2 style="margin:0">${x.origin} → ${x.dest}</h2><div class="muted small">${fdt(x.depart_at)} · Bus ${x.bus_number} (${x.plate})</div></div><div class="right">${chip(x.status)}<div class="mt"><b style="font-size:1.5rem" id="cnt">${c.boarded}/${c.total}</b><div class="small muted">abordados</div></div></div></div>
     <div class="row mt">${isDriver && ['PROGRAMADO', 'ABORDANDO'].includes(x.status) ? html`<button class="btn ok" data-act="tripStart">▶ Iniciar viaje</button>` : ''}${isDriver && x.status === 'EN_RUTA' ? html`<button class="btn err" data-act="tripFinish">■ Finalizar viaje</button>` : ''}<button class="btn sec sm" data-act="reloadMan">⟳ Actualizar lista</button>
     ${DR.offline ? html`<span class="chip warn">Sin conexión · usando lista descargada ${DR.man ? ftime(DR.man.downloaded_at) : ''}</span>` : html`<span class="chip ok">En línea</span>`}${pend ? html`<span class="chip warn">${pend} escaneo(s) pendientes <button class="btn sm" data-act="syncNow">Sincronizar</button></span>` : ''}</div></div>

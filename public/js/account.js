@@ -1,6 +1,6 @@
 /* Cuenta: ingreso, registro, compras, boletos, perfil y páginas informativas */
 'use strict';
-const DEMO = [['cliente@rutaec.test', 'Cliente'], ['oficina.andina@rutaec.test', 'Oficinista (Andina Express)'], ['chofer1.andina@rutaec.test', 'Chofer'], ['ayudante1.andina@rutaec.test', 'Ayudante'], ['gerente.andina@rutaec.test', 'Admin cooperativa'], ['admin@rutaec.test', 'Superadministrador'], ['auditor@rutaec.test', 'Auditor']];
+const DEMO = [['cliente@rutaec.test', 'Cliente'], ['oficina.andina@rutaec.test', 'Oficinista (Andina Express)'], ['chofer1.andina@rutaec.test', 'Chofer'], ['ayudante1.andina@rutaec.test', 'Ayudante'], ['gerente.andina@rutaec.test', 'Cooperativa'], ['admin@rutaec.test', 'Administrador']];
 
 route('/login', async (p, q) => {
   if (App.user) return go(q.next || HOME[App.user.role]);
@@ -10,7 +10,7 @@ route('/login', async (p, q) => {
     ${App.cfg.demo ? html`<div class="card flat mt"><b class="small">Cuentas de demostración</b> <span class="small muted">(contraseña <span class="mono">Demo1234!</span>)</span><div class="row mt">${DEMO.map(([e, l]) => html`<button class="btn sm sec" data-act="demoLogin" data-e="${e}">${l}</button>`)}</div></div>` : ''}</div>`);
 });
 async function afterLogin(r, next) {
-  setSession(r.token, r.user); await refreshUser(); await ensureCoopCtx(); shellKey = '';
+  setSession(r.token, r.user); await refreshUser(); shellKey = '';
   if (App.user.must_change) { toast('Por seguridad, cambia tu contraseña temporal'); return go('/profile'); }
   go(next || HOME[App.user.role]);
 }
@@ -71,11 +71,11 @@ App.A.rate = async (el) => { const stars = await promptBox('Calificar viaje', 'E
 route('/profile', async () => {
   const u = App.user;
   paint(view(), html`<div style="max-width:720px;margin:auto"><h1>Mi perfil</h1>${u.must_change ? html`<div class="alert warn">Tu contraseña es temporal. Cámbiala para continuar usando el sistema con seguridad.</div>` : ''}
-    <div class="card"><div class="row spread"><div><b>${u.nombres} ${u.apellidos}</b><div class="small muted">${u.email} · ${ROLE[u.role]} ${u.coop ? '· ' + u.coop.name : ''}</div></div></div>
+    <div class="card"><div class="row spread"><div><b>${u.nombres} ${u.apellidos}</b><div class="small muted">${u.email} · ${roleName(u)} ${u.coop ? '· ' + u.coop.name : ''}</div></div></div>
     <form data-submit="saveProfile" class="mt"><div class="frm"><div><label>Nombres</label><input name="nombres" value="${u.nombres}"></div><div><label>Apellidos</label><input name="apellidos" value="${u.apellidos}"></div><div><label>Celular</label><input name="phone" value="${u.phone || ''}"></div><div><label>Cédula</label><input value="${u.cedula || ''}" disabled></div></div><button class="btn mt">Guardar</button></form></div>
     <div class="card"><h3>Cambiar contraseña</h3><form data-submit="changePass"><div class="frm"><div><label>Actual</label><input type="password" name="current" required></div><div><label>Nueva</label><input type="password" name="password" minlength="8" required></div></div><button class="btn mt">Actualizar</button></form></div>
     <div class="card"><h3>Mis datos (LOPDP)</h3><p class="small muted">Puedes pedir acceso, rectificación o eliminación de tus datos escribiendo a ${App.cfg.support_email}.</p><button class="btn err sm" data-act="logout">Cerrar sesión</button></div></div>`);
-}, ['CLIENT', 'OFFICE', 'DRIVER', 'ASSISTANT', 'COOP_ADMIN', 'AUDITOR']);
+}, ['CLIENT', 'OFFICE', 'BUS', 'COOP_ADMIN', 'SUPERADMIN']);
 App.A.saveProfile = async (f) => guard($('button', f), async () => { App.user = { ...App.user, ...(await api('/auth/me', { method: 'PUT', body: formObj(f) })) }; toast('Perfil actualizado', 'ok'); });
 App.A.changePass = async (f) => guard($('button', f), async () => { await api('/auth/change-password', { method: 'POST', body: formObj(f) }); App.user.must_change = 0; f.reset(); toast('Contraseña actualizada', 'ok'); });
 
