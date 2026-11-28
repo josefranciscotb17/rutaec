@@ -62,10 +62,9 @@ async function run({ force = false } = {}) {
     ins("INSERT INTO season_rules(coop_id,name,start_date,end_date,pct,active) VALUES(NULL,?,?,?,10,1)", 'Feriado de demostración (+10%)', addDays(T, 6), addDays(T, 9));
 
     /* ---- Usuarios globales y clientes ---- */
-    const user = (email, nombres, apellidos, role, extra = {}) => ins('INSERT INTO users(email,cedula,nombres,apellidos,phone,password_hash,role,coop_id,office_id,license,license_expires,perm_void) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-      email, extra.cedula || newCedula(), nombres, apellidos, extra.phone || '09' + String(Math.floor(rnd() * 1e8)).padStart(8, '0'), hash, role, extra.coop || null, extra.office || null, extra.license || null, extra.licExp || null, extra.void ? 1 : 0);
+    const user = (email, nombres, apellidos, role, extra = {}) => ins('INSERT INTO users(email,cedula,nombres,apellidos,phone,password_hash,role,crew_position,coop_id,office_id,license,license_expires,perm_void) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      email, extra.cedula || newCedula(), nombres, apellidos, extra.phone || '09' + String(Math.floor(rnd() * 1e8)).padStart(8, '0'), hash, role, extra.crew || null, extra.coop || null, extra.office || null, extra.license || null, extra.licExp || null, extra.void ? 1 : 0);
     user('admin@rutaec.test', 'Administrador', 'General RutaEC', 'SUPERADMIN');
-    user('auditor@rutaec.test', 'Alexandra', 'Auditora Pérez', 'AUDITOR');
     const clients = [
       user('cliente@rutaec.test', 'María Fernanda', 'Cárdenas Mora', 'CLIENT'), user('cliente2@rutaec.test', 'Juan Carlos', 'Villacís Pérez', 'CLIENT'),
       user('cliente3@rutaec.test', 'Ana Lucía', 'Jaramillo Ortiz', 'CLIENT'), user('cliente4@rutaec.test', 'Diego Armando', 'Pazmiño Ruiz', 'CLIENT'),
@@ -128,8 +127,8 @@ async function run({ force = false } = {}) {
       mk(`oficina.${C.key}@rutaec.test`, pick(NOMBRES), pick(APELLIDOS), 'OFFICE', { office: off1, void: true });
       mk(`oficina2.${C.key}@rutaec.test`, pick(NOMBRES), pick(APELLIDOS), 'OFFICE', { office: off2 });
       for (let i = 1; i <= C.nbuses; i++) {
-        staff.drivers.push({ id: mk(`chofer${i}.${C.key}@rutaec.test`, pick(NOMBRES), pick(APELLIDOS), 'DRIVER', { license: 'E' + (1000000 + i * 1111 + cid), licExp: addDays(T, i === 2 ? 20 : 400) }) });
-        staff.assistants.push({ id: mk(`ayudante${i}.${C.key}@rutaec.test`, pick(NOMBRES), pick(APELLIDOS), 'ASSISTANT') });
+        staff.drivers.push({ id: mk(`chofer${i}.${C.key}@rutaec.test`, pick(NOMBRES), pick(APELLIDOS), 'BUS', { crew: 'CHOFER', license: 'E' + (1000000 + i * 1111 + cid), licExp: addDays(T, i === 2 ? 20 : 400) }) });
+        staff.assistants.push({ id: mk(`ayudante${i}.${C.key}@rutaec.test`, pick(NOMBRES), pick(APELLIDOS), 'BUS', { crew: 'AYUDANTE' }) });
       }
       // Frecuencias + tarifas
       const fids = [];
