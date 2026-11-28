@@ -36,7 +36,7 @@ erDiagram
 |---|---|
 | Configuración | `settings` (clave/valor JSON: marca, reglas, textos legales) |
 | Geografía | `provinces`, `cities`, `terminals` |
-| Organización | `cooperatives`, `offices`, `bank_accounts`, `users` (7 roles) |
+| Organización | `cooperatives`, `offices`, `bank_accounts`, `users` (5 roles: SUPERADMIN, COOP_ADMIN, OFFICE, BUS con `crew_position`, CLIENT) |
 | Flota | `bus_groups`, `buses`, `seat_types`, `seat_templates`, `bus_seats` |
 | Operación | `frequencies`, `frequency_stops`, `fares`, `season_rules`, `route_sheets`, `route_sheet_entries`, `trips` |
 | Ventas | `passengers`, `orders`, `tickets`, `payments`, `cash_sessions`, `print_jobs` |
@@ -78,4 +78,4 @@ Reglas:
 2. Cada migración corre en una transacción; si falla o deja llaves foráneas rotas (`PRAGMA foreign_key_check`), se revierte completa y el servidor no arranca.
 3. Para cambiar un `CHECK` o un `NOT NULL`, SQLite exige reconstruir la tabla: `CREATE TABLE x_new` → `INSERT INTO x_new SELECT …` → `DROP TABLE x` → `ALTER TABLE x_new RENAME TO x` → recrear índices.
 4. Una migración ya fusionada en `develop` no se edita nunca: si hay un error, se corrige con una migración nueva.
-5. Números reservados para la v0.6.0: 001 control de versiones, 002 roles, 003 asientos y fotos, 004 frecuencias, 005 rutas destacadas, 006 pasajeros y descuentos, 007 abordaje en ruta.
+5. Números reservados para la v0.6.0: 001 control de versiones, 002 roles, 003 ventanilla global, 004 asientos y fotos, 005 frecuencias, 006 rutas destacadas, 007 pasajeros y descuentos, 008 abordaje en ruta.

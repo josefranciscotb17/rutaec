@@ -4,7 +4,7 @@
 
 **Autenticación:** cabecera `Authorization: Bearer <token>` (JWT de 12 h obtenido en `POST /api/auth/login`). Los documentos imprimibles aceptan además `?token=` en `GET` para abrirse en una ventana nueva.
 
-**Contexto de cooperativa:** superadministrador y auditor indican la cooperativa con la cabecera `X-Coop-Id` (o `?coop_id=`).
+**Contexto de cooperativa:** el personal opera siempre sobre su propia cooperativa; el Administrador no opera dentro de las cooperativas.
 
 ## Público (sin sesión)
 
@@ -48,7 +48,7 @@
 | `GET` | `/api/tickets/:id/print` | Oficinista / Admin coop |
 | `GET` | `/api/orders/:id/print` | Oficinista / Admin coop |
 | `GET` | `/api/notifications` | Sesión iniciada |
-| `POST` | `/api/notifications/read` | Admin de cooperativa / Auditor |
+| `POST` | `/api/notifications/read` | Cooperativa |
 | `POST` | `/api/trips/:id/rating` | Sesión iniciada |
 | `GET` | `/api/office/trips` | Oficinista / Admin coop |
 | `GET` | `/api/office/trips/:id/seats` | Oficinista / Admin coop |
@@ -69,63 +69,63 @@
 | `GET` | `/api/office/dashboard` | Oficinista / Admin coop |
 | `GET` | `/api/manifest/:tripId` | Oficinista / Admin coop |
 
-## Chofer / ayudante
+## Bus (chofer / ayudante)
 
 | Método | Ruta | Acceso |
 |---|---|---|
-| `GET` | `/api/driver/trips` | Chofer / Ayudante |
-| `GET` | `/api/driver/history` | Chofer / Ayudante |
-| `POST` | `/api/driver/trips/:id/start` | Chofer / Ayudante |
-| `POST` | `/api/driver/trips/:id/finish` | Chofer / Ayudante |
-| `GET` | `/api/driver/trips/:id/summary` | Chofer / Ayudante |
-| `GET` | `/api/driver/trips/:id/manifest` | Chofer / Ayudante |
-| `POST` | `/api/driver/scan` | Chofer / Ayudante |
-| `POST` | `/api/driver/scans/batch` | Chofer / Ayudante |
-| `POST` | `/api/driver/trips/:id/alight` | Chofer / Ayudante |
-| `POST` | `/api/driver/sale` | Chofer / Ayudante |
-| `GET` | `/api/driver/trips/:id/free-seats` | Chofer / Ayudante |
-| `POST` | `/api/driver/trips/:id/incident` | Chofer / Ayudante |
+| `GET` | `/api/driver/trips` | Bus (chofer / ayudante) |
+| `GET` | `/api/driver/history` | Bus (chofer / ayudante) |
+| `POST` | `/api/driver/trips/:id/start` | Bus (chofer / ayudante) |
+| `POST` | `/api/driver/trips/:id/finish` | Bus (chofer / ayudante) |
+| `GET` | `/api/driver/trips/:id/summary` | Bus (chofer / ayudante) |
+| `GET` | `/api/driver/trips/:id/manifest` | Bus (chofer / ayudante) |
+| `POST` | `/api/driver/scan` | Bus (chofer / ayudante) |
+| `POST` | `/api/driver/scans/batch` | Bus (chofer / ayudante) |
+| `POST` | `/api/driver/trips/:id/alight` | Bus (chofer / ayudante) |
+| `POST` | `/api/driver/sale` | Bus (chofer / ayudante) |
+| `GET` | `/api/driver/trips/:id/free-seats` | Bus (chofer / ayudante) |
+| `POST` | `/api/driver/trips/:id/incident` | Bus (chofer / ayudante) |
 
 ## Cooperativa
 
 | Método | Ruta | Acceso |
 |---|---|---|
-| `GET` | `/api/coop/profile` | Admin de cooperativa / Auditor |
-| `PUT` | `/api/coop/profile` | Admin de cooperativa |
-| `POST` | `/api/coop/logo` | Admin de cooperativa |
-| `GET` | `/api/coop/users` | Admin de cooperativa / Auditor |
-| `POST` | `/api/coop/users` | Admin de cooperativa |
-| `PUT` | `/api/coop/users/:id` | Admin de cooperativa |
-| `POST` | `/api/coop/users/:id/reset-password` | Admin de cooperativa |
-| `POST` | `/api/coop/seat-templates/generate` | Admin de cooperativa |
-| `GET` | `/api/coop/buses` | Admin de cooperativa / Auditor |
-| `POST` | `/api/coop/buses` | Admin de cooperativa |
-| `PUT` | `/api/coop/buses/:id` | Admin de cooperativa |
-| `DELETE` | `/api/coop/buses/:id` | Admin de cooperativa |
-| `POST` | `/api/coop/buses/:id/photo` | Admin de cooperativa |
-| `GET` | `/api/coop/buses/:id/seats` | Admin de cooperativa / Auditor |
-| `PUT` | `/api/coop/buses/:id/seats` | Admin de cooperativa |
-| `GET` | `/api/coop/frequencies` | Admin de cooperativa / Auditor |
-| `POST` | `/api/coop/frequencies` | Admin de cooperativa |
-| `PUT` | `/api/coop/frequencies/:id` | Admin de cooperativa |
-| `DELETE` | `/api/coop/frequencies/:id` | Admin de cooperativa |
-| `GET` | `/api/coop/terminals` | Admin de cooperativa / Auditor |
-| `POST` | `/api/coop/route-sheets/preview` | Admin de cooperativa |
-| `POST` | `/api/coop/route-sheets` | Admin de cooperativa |
-| `GET` | `/api/coop/route-sheets` | Admin de cooperativa / Auditor |
-| `GET` | `/api/coop/route-sheets/:id` | Admin de cooperativa / Auditor |
-| `PUT` | `/api/coop/route-sheets/:id/entries/:eid` | Admin de cooperativa |
-| `POST` | `/api/coop/route-sheets/:id/publish` | Admin de cooperativa |
-| `DELETE` | `/api/coop/route-sheets/:id` | Admin de cooperativa |
-| `GET` | `/api/coop/route-sheets/:id/print` | Admin de cooperativa / Auditor |
-| `GET` | `/api/coop/trips` | Admin de cooperativa / Auditor |
-| `POST` | `/api/coop/trips` | Admin de cooperativa |
-| `PUT` | `/api/coop/trips/:id` | Admin de cooperativa |
-| `POST` | `/api/coop/trips/:id/cancel` | Admin de cooperativa |
-| `GET` | `/api/coop/dashboard` | Admin de cooperativa / Auditor |
-| `GET` | `/api/coop/reports/sales` | Admin de cooperativa / Auditor |
-| `GET` | `/api/coop/audit` | Admin de cooperativa / Auditor |
-| `GET` | `/api/coop/incidents` | Admin de cooperativa / Auditor |
+| `GET` | `/api/coop/profile` | Cooperativa |
+| `PUT` | `/api/coop/profile` | Cooperativa |
+| `POST` | `/api/coop/logo` | Cooperativa |
+| `GET` | `/api/coop/users` | Cooperativa |
+| `POST` | `/api/coop/users` | Cooperativa |
+| `PUT` | `/api/coop/users/:id` | Cooperativa |
+| `POST` | `/api/coop/users/:id/reset-password` | Cooperativa |
+| `POST` | `/api/coop/seat-templates/generate` | Cooperativa |
+| `GET` | `/api/coop/buses` | Cooperativa |
+| `POST` | `/api/coop/buses` | Cooperativa |
+| `PUT` | `/api/coop/buses/:id` | Cooperativa |
+| `DELETE` | `/api/coop/buses/:id` | Cooperativa |
+| `POST` | `/api/coop/buses/:id/photo` | Cooperativa |
+| `GET` | `/api/coop/buses/:id/seats` | Cooperativa |
+| `PUT` | `/api/coop/buses/:id/seats` | Cooperativa |
+| `GET` | `/api/coop/frequencies` | Cooperativa |
+| `POST` | `/api/coop/frequencies` | Cooperativa |
+| `PUT` | `/api/coop/frequencies/:id` | Cooperativa |
+| `DELETE` | `/api/coop/frequencies/:id` | Cooperativa |
+| `GET` | `/api/coop/terminals` | Cooperativa |
+| `POST` | `/api/coop/route-sheets/preview` | Cooperativa |
+| `POST` | `/api/coop/route-sheets` | Cooperativa |
+| `GET` | `/api/coop/route-sheets` | Cooperativa |
+| `GET` | `/api/coop/route-sheets/:id` | Cooperativa |
+| `PUT` | `/api/coop/route-sheets/:id/entries/:eid` | Cooperativa |
+| `POST` | `/api/coop/route-sheets/:id/publish` | Cooperativa |
+| `DELETE` | `/api/coop/route-sheets/:id` | Cooperativa |
+| `GET` | `/api/coop/route-sheets/:id/print` | Cooperativa |
+| `GET` | `/api/coop/trips` | Cooperativa |
+| `POST` | `/api/coop/trips` | Cooperativa |
+| `PUT` | `/api/coop/trips/:id` | Cooperativa |
+| `POST` | `/api/coop/trips/:id/cancel` | Cooperativa |
+| `GET` | `/api/coop/dashboard` | Cooperativa |
+| `GET` | `/api/coop/reports/sales` | Cooperativa |
+| `GET` | `/api/coop/audit` | Cooperativa |
+| `GET` | `/api/coop/incidents` | Cooperativa |
 | `GET` | `/api/coop/bank-accounts` | Admin de cooperativa (lista) |
 | `POST` | `/api/coop/bank-accounts` | Admin de cooperativa (crear) |
 | `PUT` | `/api/coop/bank-accounts/:id` | Admin de cooperativa (editar) |
@@ -151,30 +151,30 @@
 | `PUT` | `/api/coop/seat-templates/:id` | Admin de cooperativa (editar) |
 | `DELETE` | `/api/coop/seat-templates/:id` | Admin de cooperativa (eliminar) |
 
-## Administración y auditoría
+## Administración global
 
 | Método | Ruta | Acceso |
 |---|---|---|
-| `GET` | `/api/admin/settings` | Auditor / Superadmin (lectura) |
-| `PUT` | `/api/admin/settings` | Superadmin |
-| `POST` | `/api/admin/logo` | Superadmin |
-| `GET` | `/api/admin/cooperatives` | Auditor / Superadmin (lectura) |
-| `POST` | `/api/admin/cooperatives` | Superadmin |
-| `PUT` | `/api/admin/cooperatives/:id` | Superadmin |
-| `GET` | `/api/admin/geo` | Auditor / Superadmin (lectura) |
-| `POST` | `/api/admin/cities` | Superadmin |
-| `DELETE` | `/api/admin/cities/:id` | Superadmin |
-| `POST` | `/api/admin/terminals` | Superadmin |
-| `PUT` | `/api/admin/terminals/:id` | Superadmin |
-| `DELETE` | `/api/admin/terminals/:id` | Superadmin |
-| `GET` | `/api/admin/users` | Auditor / Superadmin (lectura) |
-| `POST` | `/api/admin/users` | Superadmin |
-| `PUT` | `/api/admin/users/:id` | Superadmin |
-| `POST` | `/api/admin/users/:id/reset-password` | Superadmin |
-| `GET` | `/api/admin/seasons` | Auditor / Superadmin (lectura) |
-| `POST` | `/api/admin/seasons` | Superadmin |
-| `DELETE` | `/api/admin/seasons/:id` | Superadmin |
-| `GET` | `/api/admin/audit` | Auditor / Superadmin (lectura) |
-| `GET` | `/api/admin/email-log` | Auditor / Superadmin (lectura) |
-| `GET` | `/api/admin/stats` | Auditor / Superadmin (lectura) |
+| `GET` | `/api/admin/settings` | Administrador |
+| `PUT` | `/api/admin/settings` | Administrador |
+| `POST` | `/api/admin/logo` | Administrador |
+| `GET` | `/api/admin/cooperatives` | Administrador |
+| `POST` | `/api/admin/cooperatives` | Administrador |
+| `PUT` | `/api/admin/cooperatives/:id` | Administrador |
+| `GET` | `/api/admin/geo` | Administrador |
+| `POST` | `/api/admin/cities` | Administrador |
+| `DELETE` | `/api/admin/cities/:id` | Administrador |
+| `POST` | `/api/admin/terminals` | Administrador |
+| `PUT` | `/api/admin/terminals/:id` | Administrador |
+| `DELETE` | `/api/admin/terminals/:id` | Administrador |
+| `GET` | `/api/admin/users` | Administrador |
+| `POST` | `/api/admin/users` | Administrador |
+| `PUT` | `/api/admin/users/:id` | Administrador |
+| `POST` | `/api/admin/users/:id/reset-password` | Administrador |
+| `GET` | `/api/admin/seasons` | Administrador |
+| `POST` | `/api/admin/seasons` | Administrador |
+| `DELETE` | `/api/admin/seasons/:id` | Administrador |
+| `GET` | `/api/admin/audit` | Administrador |
+| `GET` | `/api/admin/email-log` | Administrador |
+| `GET` | `/api/admin/stats` | Administrador |
 

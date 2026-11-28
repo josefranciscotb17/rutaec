@@ -1,8 +1,8 @@
 /* Genera docs/API.md leyendo las rutas de Express. Uso: npm run docs:api */
 const fs = require('fs'), path = require('path');
 const dir = path.join(__dirname, '..', 'server', 'routes');
-const files = { 'public.js': 'Público (sin sesión)', 'auth.js': 'Autenticación (/api/auth)', 'sales.js': 'Compras, boletos, oficina y caja', 'driver.js': 'Chofer / ayudante', 'coop.js': 'Cooperativa', 'admin.js': 'Administración y auditoría' };
-let md = '# Referencia de la API REST\n\n> Generado automáticamente con `npm run docs:api`. Todas las rutas cuelgan de `/api` (la autenticación de `auth.js` va bajo `/api/auth`). Las respuestas son JSON; los errores tienen la forma `{ "error": "mensaje", "code": "CODIGO" }`.\n\n**Autenticación:** cabecera `Authorization: Bearer <token>` (JWT de 12 h obtenido en `POST /api/auth/login`). Los documentos imprimibles aceptan además `?token=` en `GET` para abrirse en una ventana nueva.\n\n**Contexto de cooperativa:** superadministrador y auditor indican la cooperativa con la cabecera `X-Coop-Id` (o `?coop_id=`).\n\n';
+const files = { 'public.js': 'Público (sin sesión)', 'auth.js': 'Autenticación (/api/auth)', 'sales.js': 'Compras, boletos, oficina y caja', 'driver.js': 'Bus (chofer / ayudante)', 'coop.js': 'Cooperativa', 'admin.js': 'Administración global' };
+let md = '# Referencia de la API REST\n\n> Generado automáticamente con `npm run docs:api`. Todas las rutas cuelgan de `/api` (la autenticación de `auth.js` va bajo `/api/auth`). Las respuestas son JSON; los errores tienen la forma `{ "error": "mensaje", "code": "CODIGO" }`.\n\n**Autenticación:** cabecera `Authorization: Bearer <token>` (JWT de 12 h obtenido en `POST /api/auth/login`). Los documentos imprimibles aceptan además `?token=` en `GET` para abrirse en una ventana nueva.\n\n**Contexto de cooperativa:** el personal opera siempre sobre su propia cooperativa; el Administrador no opera dentro de las cooperativas.\n\n';
 for (const [f, title] of Object.entries(files)) {
   if (!fs.existsSync(path.join(dir, f))) continue; // módulos aún no incorporados al repositorio
   const src = fs.readFileSync(path.join(dir, f), 'utf8'), rows = [];
@@ -10,12 +10,11 @@ for (const [f, title] of Object.entries(files)) {
   while ((m = re.exec(src))) {
     const guards = m[3];
     let access = 'Público';
-    if (/requireRole\('AUDITOR'\)|\bboth\b/.test(guards)) access = 'Auditor / Superadmin (lectura)';
-    else if (/\bsa\b/.test(guards)) access = 'Superadmin';
-    else if (/\bwrite\b/.test(guards)) access = 'Admin de cooperativa';
-    else if (/\bread\b/.test(guards)) access = 'Admin de cooperativa / Auditor';
+    if (/\bsa\b/.test(guards)) access = 'Administrador';
+    else if (/\bwrite\b/.test(guards)) access = 'Cooperativa';
+    else if (/\bread\b/.test(guards)) access = 'Cooperativa';
     else if (/\.\.\.office|requireRole\('OFFICE'/.test(guards)) access = 'Oficinista / Admin coop';
-    else if (/\.\.\.crew/.test(guards)) access = 'Chofer / Ayudante';
+    else if (/\.\.\.crew/.test(guards)) access = 'Bus (chofer / ayudante)';
     else if (/requireAuth/.test(guards)) access = 'Sesión iniciada';
     const prefix = f === 'auth.js' ? '/auth' : '';
     rows.push(`| \`${m[1].toUpperCase()}\` | \`/api${prefix}${m[2]}\` | ${access} |`);
