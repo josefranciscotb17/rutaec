@@ -13,7 +13,7 @@ function loadSecret() {
 const SECRET = loadSecret();
 const sign = (u) => jwt.sign({ id: u.id, role: u.role }, SECRET, { expiresIn: '12h' });
 const hmac = (s, n = 8) => crypto.createHmac('sha256', SECRET).update(s).digest('hex').toUpperCase().slice(0, n);
-const STAFF = ['COOP_ADMIN', 'OFFICE', 'DRIVER', 'ASSISTANT'];
+const STAFF = ['COOP_ADMIN', 'OFFICE', 'BUS'];
 function publicUser(u) { if (!u) return null; const { password_hash, reset_token, reset_expires, failed_attempts, locked_until, ...rest } = u; return rest; }
 
 /** Carga req.user si hay token (cabecera Bearer o ?token= en GET para vistas imprimibles) */
@@ -31,13 +31,8 @@ const requireRole = (...roles) => (req, res, next) => {
   if (roles.includes(req.user.role)) return next(); // sin excepciones: el SUPERADMIN solo entra donde se le nombra (/admin/*)
   next(httpError(403, 'No tienes permiso para esta acción', 'FORBIDDEN'));
 };
-/** Cooperativa en contexto: el personal usa la suya. El SUPERADMIN no opera dentro de las cooperativas (solo /admin/*). */
+/** Cooperativa en contexto: siempre la del usuario. El SUPERADMIN no opera dentro de las cooperativas (solo /admin/*). */
 function coopId(req) {
-  if (req.user.role === 'AUDITOR') { // shortcut: lectura temporal del AUDITOR; el rol se elimina en HU-36
-    const c = +(req.query.coop_id || req.headers['x-coop-id'] || (req.body && req.body.coop_id) || 0);
-    if (!c) throw httpError(400, 'Selecciona una cooperativa', 'COOP_REQUIRED');
-    return c;
-  }
   if (!req.user.coop_id) throw httpError(403, 'Tu usuario no pertenece a una cooperativa');
   return req.user.coop_id;
 }

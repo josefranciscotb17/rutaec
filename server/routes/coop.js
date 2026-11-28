@@ -11,7 +11,7 @@ const { generateRotation, findConflicts } = require('../lib/rotation');
 const { imageUpload, saveImage } = require('../lib/upload');
 const { nowLocal, today, addDays, httpError, constraintKind, validCedula, validEmail, validPlate, validRuc, randCode, money, dow } = require('../lib/util');
 
-const read = requireRole('COOP_ADMIN', 'AUDITOR');
+const read = requireRole('COOP_ADMIN');
 const write = requireRole('COOP_ADMIN');
 const asJson = (v) => (typeof v === 'string' ? v : JSON.stringify(v ?? []));
 const fkGuard = (fn) => (req, res, next) => { try { fn(req, res, next); } catch (e) { if (constraintKind(e) === 'FOREIGNKEY') e = httpError(409, 'No se puede eliminar: tiene registros asociados. Desactívalo en su lugar.'); next(e); } };
@@ -70,32 +70,33 @@ crud('/coop/bus-groups', 'bus_groups', ['name', 'description'], { order: 'name',
 crud('/coop/seasons', 'season_rules', ['name', 'start_date', 'end_date', 'pct', 'active'], { order: 'start_date', validate: (b) => { need(b.name, 'Indica el nombre'); if (!/^\d{4}-\d{2}-\d{2}$/.test(b.start_date || '') || !/^\d{4}-\d{2}-\d{2}$/.test(b.end_date || '') || b.end_date < b.start_date) throw httpError(400, 'Rango de fechas inválido'); b.pct = Math.max(-50, Math.min(200, +b.pct || 0)); b.active = b.active ?? 1; } });
 
 /* ---------- Personal ---------- */
-const STAFF_ROLES = ['COOP_ADMIN', 'OFFICE', 'DRIVER', 'ASSISTANT'];
+const STAFF_ROLES = ['COOP_ADMIN', 'OFFICE', 'BUS'];
 router.get('/coop/users', read, (req, res) => {
-  res.json(db.prepare(`SELECT u.id,u.email,u.cedula,u.nombres,u.apellidos,u.phone,u.role,u.office_id,u.license,u.license_expires,u.active,u.perm_void,u.last_login,o.name AS office FROM users u LEFT JOIN offices o ON o.id=u.office_id WHERE u.coop_id=? AND u.role IN ('COOP_ADMIN','OFFICE','DRIVER','ASSISTANT') ORDER BY u.role,u.apellidos`).all(coopId(req)));
+  res.json(db.prepare(`SELECT u.id,u.email,u.cedula,u.nombres,u.apellidos,u.phone,u.role,u.crew_position,u.office_id,u.license,u.license_expires,u.active,u.perm_void,u.last_login,o.name AS office FROM users u LEFT JOIN offices o ON o.id=u.office_id WHERE u.coop_id=? AND u.role IN ('COOP_ADMIN','OFFICE','BUS') ORDER BY u.role,u.apellidos`).all(coopId(req)));
 });
 function checkStaff(b, id) {
   need(b.nombres, 'Nombres requeridos'); need(b.apellidos, 'Apellidos requeridos');
   if (!validEmail(b.email)) throw httpError(400, 'Correo inválido');
   if (!STAFF_ROLES.includes(b.role)) throw httpError(400, 'Rol inválido');
   if (b.cedula && !validCedula(b.cedula)) throw httpError(400, 'Cédula inválida');
-  if (b.role === 'DRIVER' && b.license_expires && b.license_expires < today()) throw httpError(400, 'La licencia del chofer está vencida');
+  if (b.role === 'BUS') { if (!['CHOFER', 'AYUDANTE'].includes(b.crew_position)) throw httpError(400, 'Indica si es chofer o ayudante'); } else b.crew_position = null;
+  if (b.role === 'BUS' && b.crew_position === 'CHOFER' && b.license_expires && b.license_expires < today()) throw httpError(400, 'La licencia del chofer está vencida');
   const dup = db.prepare('SELECT id FROM users WHERE email=? AND id<>?').get(b.email, id || 0);
   if (dup) throw httpError(409, 'Ya existe un usuario con ese correo');
 }
 router.post('/coop/users', write, (req, res) => {
   const cid = coopId(req), b = req.body || {}; checkStaff(b);
   const pass = b.password || randCode(8);
-  const id = db.prepare('INSERT INTO users(email,cedula,nombres,apellidos,phone,password_hash,role,coop_id,office_id,license,license_expires,must_change,perm_void) VALUES(?,?,?,?,?,?,?,?,?,?,?,1,?)')
-    .run(b.email.trim().toLowerCase(), b.cedula || null, b.nombres.trim(), b.apellidos.trim(), b.phone || null, bcrypt.hashSync(pass, 10), b.role, cid, b.office_id || null, b.license || null, b.license_expires || null, b.perm_void ? 1 : 0).lastInsertRowid;
+  const id = db.prepare('INSERT INTO users(email,cedula,nombres,apellidos,phone,password_hash,role,crew_position,coop_id,office_id,license,license_expires,must_change,perm_void) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?)')
+    .run(b.email.trim().toLowerCase(), b.cedula || null, b.nombres.trim(), b.apellidos.trim(), b.phone || null, bcrypt.hashSync(pass, 10), b.role, b.crew_position, cid, b.office_id || null, b.license || null, b.license_expires || null, b.perm_void ? 1 : 0).lastInsertRowid;
   audit(req, 'create', 'users', id, null, { email: b.email, role: b.role });
   res.status(201).json({ id, temp_password: pass });
 });
 router.put('/coop/users/:id', write, (req, res) => {
   const cid = coopId(req), u = own('users', req.params.id, cid), b = { ...u, ...req.body }; checkStaff(b, u.id);
   if (u.id === req.user.id && (b.active === 0 || b.role !== u.role)) throw httpError(400, 'No puedes desactivarte ni cambiar tu propio rol');
-  db.prepare('UPDATE users SET email=?,cedula=?,nombres=?,apellidos=?,phone=?,role=?,office_id=?,license=?,license_expires=?,active=?,perm_void=? WHERE id=?')
-    .run(b.email.trim().toLowerCase(), b.cedula || null, b.nombres, b.apellidos, b.phone || null, b.role, b.office_id || null, b.license || null, b.license_expires || null, b.active ? 1 : 0, b.perm_void ? 1 : 0, u.id);
+  db.prepare('UPDATE users SET email=?,cedula=?,nombres=?,apellidos=?,phone=?,role=?,crew_position=?,office_id=?,license=?,license_expires=?,active=?,perm_void=? WHERE id=?')
+    .run(b.email.trim().toLowerCase(), b.cedula || null, b.nombres, b.apellidos, b.phone || null, b.role, b.crew_position, b.office_id || null, b.license || null, b.license_expires || null, b.active ? 1 : 0, b.perm_void ? 1 : 0, u.id);
   audit(req, 'update', 'users', u.id, { role: u.role, active: u.active }, { role: b.role, active: b.active });
   res.json({ ok: true });
 });
@@ -265,8 +266,8 @@ function sheetInputs(cid, b) {
   const buses = db.prepare("SELECT id,number FROM buses WHERE coop_id=? AND group_id=? AND status='ACTIVO' ORDER BY number+0, number").all(cid, group.id);
   let freqs = db.prepare('SELECT * FROM frequencies WHERE coop_id=? AND active=1 ORDER BY depart_time,id').all(cid);
   if (Array.isArray(b.frequency_ids) && b.frequency_ids.length) freqs = b.frequency_ids.map(id => freqs.find(f => f.id === +id)).filter(Boolean);
-  const drivers = db.prepare("SELECT id FROM users WHERE coop_id=? AND role='DRIVER' AND active=1 ORDER BY id").all(cid);
-  const assistants = db.prepare("SELECT id FROM users WHERE coop_id=? AND role='ASSISTANT' AND active=1 ORDER BY id").all(cid);
+  const drivers = db.prepare("SELECT id FROM users WHERE coop_id=? AND role='BUS' AND crew_position='CHOFER' AND active=1 ORDER BY id").all(cid);
+  const assistants = db.prepare("SELECT id FROM users WHERE coop_id=? AND role='BUS' AND crew_position='AYUDANTE' AND active=1 ORDER BY id").all(cid);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(b.start_date || '') || !/^\d{4}-\d{2}-\d{2}$/.test(b.end_date || '') || b.end_date < b.start_date) throw httpError(400, 'Rango de fechas inválido');
   if ((new Date(b.end_date) - new Date(b.start_date)) / 864e5 > 92) throw httpError(400, 'El rango máximo es de 93 días');
   return { group, buses, freqs, drivers, assistants };
@@ -404,7 +405,7 @@ router.get('/coop/dashboard', read, (req, res) => {
     buses: db.prepare("SELECT status, COUNT(*) c FROM buses WHERE coop_id=? GROUP BY status").all(cid),
     alerts: [
       ...db.prepare("SELECT 'Revisión técnica por vencer: bus ' || number || ' (' || tech_review_expires || ')' a FROM buses WHERE coop_id=? AND status='ACTIVO' AND tech_review_expires IS NOT NULL AND tech_review_expires <= ?").all(cid, addDays(d, 30)).map(r => r.a),
-      ...db.prepare("SELECT 'Licencia por vencer: ' || nombres || ' ' || apellidos || ' (' || license_expires || ')' a FROM users WHERE coop_id=? AND role='DRIVER' AND active=1 AND license_expires IS NOT NULL AND license_expires <= ?").all(cid, addDays(d, 30)).map(r => r.a),
+      ...db.prepare("SELECT 'Licencia por vencer: ' || nombres || ' ' || apellidos || ' (' || license_expires || ')' a FROM users WHERE coop_id=? AND role='BUS' AND crew_position='CHOFER' AND active=1 AND license_expires IS NOT NULL AND license_expires <= ?").all(cid, addDays(d, 30)).map(r => r.a),
     ],
   });
 });

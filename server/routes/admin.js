@@ -1,4 +1,4 @@
-/** Administración global (SUPERADMIN) y auditoría (AUDITOR). */
+/** Administración global (SUPERADMIN). */
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const { db } = require('../db');
@@ -8,11 +8,11 @@ const { audit } = require('../lib/notify');
 const { imageUpload, saveImage } = require('../lib/upload');
 const { httpError, validEmail, validRuc, validCedula, randCode, today, addDays } = require('../lib/util');
 
-const sa = requireRole('SUPERADMIN'), both = requireRole('SUPERADMIN', 'AUDITOR');
+const sa = requireRole('SUPERADMIN');
 const need = (v, m) => { if (v === undefined || v === null || String(v).trim() === '') throw httpError(400, m); };
 
 /* ---- Ajustes del sitio (marca, redes, políticas, reglas de negocio) ---- */
-router.get('/admin/settings', both, (req, res) => res.json(S.all()));
+router.get('/admin/settings', sa, (req, res) => res.json(S.all()));
 router.put('/admin/settings', sa, (req, res) => {
   const before = S.all(), b = req.body || {}, allowed = Object.keys(S.DEFAULTS);
   const num = ['reserve_minutes', 'cash_hold_minutes', 'review_grace_minutes', 'max_seats', 'online_cutoff_minutes', 'review_max_minutes', 'terminal_fee_cents', 'discount_minor_pct', 'discount_senior_pct', 'discount_disability_pct', 'senior_age', 'driver_price_min_pct', 'driver_price_max_pct'];
@@ -30,7 +30,7 @@ router.put('/admin/settings', sa, (req, res) => {
 router.post('/admin/logo', sa, imageUpload, (req, res) => { const u = saveImage(req.file); S.set('logo', u); audit(req, 'update', 'settings', 'logo'); res.json({ logo: u }); });
 
 /* ---- Cooperativas ---- */
-router.get('/admin/cooperatives', both, (req, res) => res.json(db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM buses WHERE coop_id=c.id) buses, (SELECT COUNT(*) FROM users WHERE coop_id=c.id) users FROM cooperatives c ORDER BY c.name`).all()));
+router.get('/admin/cooperatives', sa, (req, res) => res.json(db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM buses WHERE coop_id=c.id) buses, (SELECT COUNT(*) FROM users WHERE coop_id=c.id) users FROM cooperatives c ORDER BY c.name`).all()));
 router.post('/admin/cooperatives', sa, (req, res) => {
   const b = req.body || {}; need(b.name, 'Indica el nombre'); need(b.ruc, 'Indica el RUC de la cooperativa');
   if (!validRuc(b.ruc)) throw httpError(400, 'RUC inválido (13 dígitos terminados en 001)');
@@ -61,7 +61,7 @@ router.put('/admin/cooperatives/:id', sa, (req, res) => {
 });
 
 /* ---- Geografía: provincias, ciudades, terminales ---- */
-router.get('/admin/geo', both, (req, res) => res.json({
+router.get('/admin/geo', sa, (req, res) => res.json({
   provinces: db.prepare('SELECT * FROM provinces ORDER BY name').all(),
   cities: db.prepare('SELECT c.*, p.name AS province FROM cities c JOIN provinces p ON p.id=c.province_id ORDER BY c.name').all(),
   terminals: db.prepare('SELECT t.*, c.name AS city FROM terminals t JOIN cities c ON c.id=t.city_id ORDER BY c.name, t.name').all(),
@@ -74,7 +74,7 @@ router.put('/admin/terminals/:id', sa, (req, res) => { const t = db.prepare('SEL
 router.delete('/admin/terminals/:id', sa, fk((req, res) => { db.prepare('DELETE FROM terminals WHERE id=?').run(+req.params.id); res.json({ ok: true }); }));
 
 /* ---- Usuarios globales ---- */
-router.get('/admin/users', both, (req, res) => {
+router.get('/admin/users', sa, (req, res) => {
   const { q, role, coop_id } = req.query, c = [], p = [];
   if (q) { c.push("(u.email LIKE ? OR u.nombres||' '||u.apellidos LIKE ? OR u.cedula LIKE ?)"); p.push(`%${q}%`, `%${q}%`, `%${q}%`); }
   if (role) { c.push('u.role=?'); p.push(role); }
@@ -84,7 +84,7 @@ router.get('/admin/users', both, (req, res) => {
 router.post('/admin/users', sa, (req, res) => {
   const b = req.body || {}; need(b.nombres, 'Nombres requeridos'); need(b.apellidos, 'Apellidos requeridos');
   if (!validEmail(b.email)) throw httpError(400, 'Correo inválido');
-  if (!['SUPERADMIN', 'AUDITOR', 'COOP_ADMIN'].includes(b.role)) throw httpError(400, 'Desde aquí solo se crean SUPERADMIN, AUDITOR o COOP_ADMIN');
+  if (!['SUPERADMIN', 'COOP_ADMIN'].includes(b.role)) throw httpError(400, 'Desde aquí solo se crean SUPERADMIN o COOP_ADMIN');
   if (b.role === 'COOP_ADMIN') need(b.coop_id, 'Selecciona la cooperativa');
   if (b.cedula && !validCedula(b.cedula)) throw httpError(400, 'Cédula inválida');
   if (db.prepare('SELECT 1 FROM users WHERE email=?').get(b.email)) throw httpError(409, 'Ya existe un usuario con ese correo');
@@ -106,7 +106,7 @@ router.post('/admin/users/:id/reset-password', sa, (req, res) => {
 });
 
 /* ---- Temporadas globales ---- */
-router.get('/admin/seasons', both, (req, res) => res.json(db.prepare('SELECT * FROM season_rules WHERE coop_id IS NULL ORDER BY start_date').all()));
+router.get('/admin/seasons', sa, (req, res) => res.json(db.prepare('SELECT * FROM season_rules WHERE coop_id IS NULL ORDER BY start_date').all()));
 router.post('/admin/seasons', sa, (req, res) => {
   const b = req.body; need(b.name, 'Nombre requerido');
   if (!b.start_date || !b.end_date || b.end_date < b.start_date) throw httpError(400, 'Rango inválido');
@@ -115,15 +115,15 @@ router.post('/admin/seasons', sa, (req, res) => {
 router.delete('/admin/seasons/:id', sa, (req, res) => { db.prepare('DELETE FROM season_rules WHERE id=? AND coop_id IS NULL').run(+req.params.id); res.json({ ok: true }); });
 
 /* ---- Auditoría, correos y estadísticas ---- */
-router.get('/admin/audit', both, (req, res) => {
+router.get('/admin/audit', sa, (req, res) => {
   const { q, action, user } = req.query, c = [], p = [];
   if (q) { c.push('(entity LIKE ? OR entity_id LIKE ? OR after LIKE ?)'); p.push(`%${q}%`, `%${q}%`, `%${q}%`); }
   if (action) { c.push('action=?'); p.push(action); }
   if (user) { c.push('user_email LIKE ?'); p.push(`%${user}%`); }
   res.json(db.prepare(`SELECT * FROM audit_logs ${c.length ? 'WHERE ' + c.join(' AND ') : ''} ORDER BY id DESC LIMIT 500`).all(...p));
 });
-router.get('/admin/email-log', both, (req, res) => res.json(db.prepare('SELECT * FROM email_log ORDER BY id DESC LIMIT 200').all()));
-router.get('/admin/stats', both, (req, res) => {
+router.get('/admin/email-log', sa, (req, res) => res.json(db.prepare('SELECT * FROM email_log ORDER BY id DESC LIMIT 200').all()));
+router.get('/admin/stats', sa, (req, res) => {
   const d = today(), g = (sql, ...p) => db.prepare(sql).get(...p);
   res.json({
     coops: g('SELECT COUNT(*) c FROM cooperatives WHERE active=1').c, users: g('SELECT COUNT(*) c FROM users').c, clients: g("SELECT COUNT(*) c FROM users WHERE role='CLIENT'").c,
