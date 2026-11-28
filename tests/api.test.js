@@ -135,9 +135,7 @@ test('reportes y administración', async () => {
   assert.equal((await api('GET', '/api/admin/stats', { token: sa })).status, 200);
   const bad = await api('PUT', '/api/admin/settings', { token: sa, body: { primary_color: 'rojo' } }); assert.equal(bad.status, 400);
   assert.equal((await api('PUT', '/api/admin/settings', { token: sa, body: { site_name: 'RutaEC', reserve_minutes: 5 } })).status, 200);
-  const aud = await login('auditor@rutaec.test');
-  assert.equal((await api('GET', '/api/admin/audit', { token: aud })).status, 200);
-  assert.equal((await api('PUT', '/api/admin/settings', { token: aud, body: { reserve_minutes: 9 } })).status, 403);
+  assert.equal((await api('GET', '/api/admin/audit', { token: sa })).status, 200);
 });
 
 test('el Administrador no opera dentro de las cooperativas (HU-34)', async () => {
@@ -169,4 +167,22 @@ test('alta de buses: datos obligatorios y placa duplicada (HU-35)', async () => 
   assert.equal((await api('POST', '/api/coop/buses', { token: g, body: bus })).status, 201);
   assert.equal((await api('POST', '/api/coop/buses', { token: g, body: { ...bus, number: '902' } })).status, 409);
   assert.equal((await api('POST', '/api/coop/buses', { token: g, body: { ...bus, plate: 'PBA-1235' } })).status, 409);
+});
+
+test('roles oficiales y CHECK de cooperativa (HU-36)', async () => {
+  const ins = (role, coop, crew) => db.prepare('INSERT INTO users(email,nombres,apellidos,password_hash,role,coop_id,crew_position) VALUES(?,?,?,?,?,?,?)').run(`x${Math.random()}@t.ec`, 'A', 'B', 'h', role, coop, crew);
+  assert.throws(() => ins('BUS', 1, null), /CHECK/);
+  assert.throws(() => ins('BUS', null, 'CHOFER'), /CHECK/);
+  assert.throws(() => ins('COOP_ADMIN', null, null), /CHECK/);
+  assert.throws(() => ins('CLIENT', 1, null), /CHECK/);
+  assert.throws(() => ins('AUDITOR', null, null), /CHECK/);
+  const roles = db.prepare('SELECT DISTINCT role FROM users ORDER BY role').all().map((r) => r.role);
+  assert.deepEqual(roles, ['BUS', 'CLIENT', 'COOP_ADMIN', 'OFFICE', 'SUPERADMIN']);
+  const chofer = await login('chofer1.andina@rutaec.test');
+  assert.equal((await api('GET', '/api/driver/trips', { token: chofer })).status, 200);
+  const g = await login('gerente.andina@rutaec.test');
+  const sinPos = await api('POST', '/api/coop/users', { token: g, body: { nombres: 'Ana', apellidos: 'Ruiz', email: 'bus.sinpos@t.ec', role: 'BUS' } });
+  assert.equal(sinPos.status, 400);
+  const ok = await api('POST', '/api/coop/users', { token: g, body: { nombres: 'Ana', apellidos: 'Ruiz', email: 'bus.ayu@t.ec', role: 'BUS', crew_position: 'AYUDANTE' } });
+  assert.equal(ok.status, 201);
 });

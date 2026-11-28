@@ -6,7 +6,7 @@ const { notifyRole, audit } = require('../lib/notify');
 const { nowLocal, addDays, httpError, diffMinutes } = require('../lib/util');
 const { maskCedula } = require('../lib/core');
 
-const crew = [requireAuth, requireRole('DRIVER', 'ASSISTANT')];
+const crew = [requireAuth, requireRole('BUS')];
 function myTrip(req, id) {
   const t = core.getTrip(+id);
   if (!t) throw httpError(404, 'Viaje no encontrado');
